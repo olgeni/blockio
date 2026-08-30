@@ -1,0 +1,259 @@
+.Dd August 30, 2026
+.Dt BLOCKIO 8
+.Os
+.Sh NAME
+.Nm blockio
+.Nd display block device activity as a map of the address space
+.Sh SYNOPSIS
+.Nm
+.Op Fl a
+.Op Fl i Ar interval
+.Op Fl color Ar mode
+.Op Fl scale Ar scale
+.Op Fl thresholds Ar list
+.Op Fl decay Ar duration
+.Op Fl trail Ar duration
+.Op Fl buckets Ar n
+.Op Fl half
+.Op Ar device ...
+.Nm
+.Fl l
+.Nm
+.Fl demo Ar n
+.Nm
+.Fl once
+.Op Fl for Ar duration
+.Op Fl size Ar WxH
+.Sh DESCRIPTION
+.Nm
+draws what the disks are doing as a map: one pane per device, one cell per
+slice of the device's address space, green for reads, red for writes and
+amber for TRIM.
+Cell zero is LBA zero in the top left, and cells run left to right and top
+to bottom, so a whole device fits a pane whatever its size.
+A resilver or a scrub appears as a bright band sweeping across the map.
+.Pp
+The data comes from DTrace's
+.Xr dtrace 1
+.Va io
+provider, so
+.Nm
+must run as root, and the DTrace modules must be loaded:
+.Pp
+.Dl kldload dtraceall
+.Pp
+Device geometry comes from
+.Xr diskinfo 8 ,
+which also needs root.
+.Pp
+Named devices are watched, with or without a
+.Pa /dev/
+prefix.
+Given no names and no
+.Fl a ,
+.Nm
+offers a list of every disk in
+.Va kern.disks
+that answers
+.Xr diskinfo 8 ,
+all of them preselected; devices without media are left out.
+.Pp
+The options are:
+.Bl -tag -width "-thresholds list"
+.It Fl a
+Watch every disk, without asking.
+.It Fl l
+List the disks and exit.
+.It Fl i Ar interval
+Sampling interval.
+The default is 100ms.
+.It Fl color Ar mode
+Color depth:
+.Cm auto
+(the default),
+.Cm truecolor ,
+.Cm 256 ,
+.Cm 16
+or
+.Cm off .
+Truecolor gives the decay a continuous gradient, 256 colors a five step
+ramp per command, 16 colors dim and bright, and
+.Cm off
+draws the trail as a middle dot and activity as block characters of
+rising density.
+.Ev NO_COLOR
+is honored.
+.It Fl scale Ar scale
+How a byte rate becomes a color.
+.Cm auto ,
+the default, measures each device against its own busiest cell, so a quiet
+disk still shows structure.
+.Cm fixed
+measures against
+.Fl thresholds ,
+so the same color always means the same rate.
+.It Fl thresholds Ar list
+Hot and cold steps for
+.Cm fixed ,
+in bytes per second
+.Em per cell ,
+ascending, comma separated, one to eight of them.
+.Cm K , M
+and
+.Cm G
+suffixes are binary.
+The default is
+.Ql 64K,512K,4M,32M .
+A cell covers a slice of a device rather than all of it, so useful
+thresholds are far below the device's total throughput.
+.It Fl decay Ar duration
+Half-life of activity on the map.
+The default is 500ms.
+.It Fl trail Ar duration
+Half-life of the trail, the dim record of where the head has been.
+The default is 60s;
+.Ql 0
+turns it off.
+.It Fl buckets Ar n
+How finely the kernel splits each device.
+DTrace aggregates each I/O into
+.Ql offset * buckets / mediasize ,
+so this is the ceiling on how fine the map can be.
+Zero, the default, asks for about as many as the terminal can draw.
+The value is clamped to 256 through 16384 and fixed for the run: enlarging
+the window afterwards does not make the map finer.
+.It Fl half
+Draw two rows of cells per terminal row, the top half of each cell in the
+foreground color and the bottom half in the background one.
+On by default; it needs a background color, so it is ignored with
+.Fl color Cm off .
+.It Fl demo Ar n
+Fabricate
+.Ar n
+devices and traffic instead of tracing anything.
+Needs neither root nor disks, and is the easy way to look at the layouts and
+the color modes.
+.It Fl once
+Sample for a while, print one frame to standard output and exit, for
+scripting or for pasting into a report.
+.It Fl for Ar duration
+How long
+.Fl once
+samples.
+The default is 2s.
+.It Fl size Ar WxH
+Frame size for
+.Fl once .
+The default is 100x30.
+.El
+.Ss The display
+Every cell carries two layers.
+Activity fades with the half-life of
+.Fl decay ,
+so the bright part of the map is what the disk is doing now.
+Under it a dimmer trail fades with the half-life of
+.Fl trail ,
+showing where the head has been.
+.Pp
+The pane header names the device, its size and its description, and the
+line below gives read, write and TRIM rates in bytes and operations per
+second, with the total moved since the map was last cleared.
+.Pp
+Panes go in one column for one or two devices and two columns above that, so
+three devices sit in the four pane layout, five in the six pane layout and
+seven in the eight pane layout.
+.Ss Keys
+.Bl -tag -width "1 to 9" -compact
+.It Ic space , p
+Pause.
+The map freezes;
+.Xr dtrace 1
+keeps running.
+.It Ic c
+Clear the map and the totals.
+.It Ic s
+Switch the color scale between
+.Cm auto
+and
+.Cm fixed .
+.It Ic + , -
+Double or halve the thresholds, switching to
+.Cm fixed .
+.It Ic 1 No to Ic 9
+Show one device full screen; the same key returns.
+.It Ic 0 , a
+Show every device again.
+.It Ic q , esc , ^C
+Quit.
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width BLOCKIO_CONFIG
+.It Ev BLOCKIO_CONFIG
+Path of the configuration file, overriding the default.
+.It Ev XDG_CONFIG_HOME
+Base directory of the configuration file.
+.It Ev NO_COLOR
+If set, the map is drawn without color.
+.El
+.Sh FILES
+.Bl -tag -width "~/.config/blockio/config"
+.It Pa ~/.config/blockio/config
+Defaults, one
+.Ql option = value
+per line, with
+.Ql #
+comments.
+The options are
+.Cm color , scale , thresholds , decay , trail , buckets , half
+and
+.Cm interval ,
+each taking the same values as the flag of that name.
+Flags override the file, and a bad line is a warning rather than an error.
+.El
+.Sh EXAMPLES
+Watch both halves of a mirror while it resilvers, with colors that mean the
+same thing on both:
+.Pp
+.Dl "blockio -scale fixed -thresholds 1M,8M,32M,128M ada0 ada1"
+.Pp
+Follow a scrub for a long time, keeping the trail so the swept region stays
+visible:
+.Pp
+.Dl "blockio -a -trail 10m"
+.Pp
+Capture one frame for a report:
+.Pp
+.Dl "blockio -a -once -for 5s -size 120x40 > frame.txt"
+.Pp
+Look at the eight pane layout on a machine with two disks:
+.Pp
+.Dl "blockio -demo 8 -color truecolor"
+.Sh SEE ALSO
+.Xr dtrace 1 ,
+.Xr systat 1 ,
+.Xr diskinfo 8 ,
+.Xr gstat 8 ,
+.Xr iostat 8 ,
+.Xr zpool 8
+.Pp
+The scripts shipped beside
+.Nm ,
+.Pa iosnoop.d
+and
+.Pa iosum.d ,
+show the same data as text.
+.Sh AUTHORS
+.An Giacomo Olgeni
+.Sh CAVEATS
+Each logical I/O reaches the
+.Va io
+provider twice, once at the GEOM layer and once at the disk layer.
+.Nm
+traces the disk layer only, so nothing is counted twice, but activity to a
+provider that never reaches a disk, such as a fully cached read, is not
+shown at all: this is a map of what the disks do, not of what the file
+system was asked for.
+.Pp
+The bucket count is baked into the generated D script at startup.
+Resizing the terminal rearranges the panes but does not make the map finer;
+restart for that.

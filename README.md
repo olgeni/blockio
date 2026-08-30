@@ -20,6 +20,13 @@ man ./blockio.8              # manual page
 It needs root (for `dtrace(1)` and `diskinfo(8)`) and the DTrace modules:
 `kldload dtraceall`, or `dtraceall_load="YES"` in `/boot/loader.conf`.
 
+![two mirror halves under load](doc/main.png)
+
+Both halves of a ZFS mirror, five seconds of scattered reads with one
+sequential band each, a burst of writes through the pool, and a little TRIM.
+`doc/screenshot.sh` regenerates it: `-once` prints a frame, `freeze` turns it
+into a PNG.
+
 Without color, so it survives a paste into a README, one device mid-sweep:
 
 ```

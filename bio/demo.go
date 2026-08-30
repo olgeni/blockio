@@ -10,7 +10,7 @@ import (
 // machine that does not have eight disks (and without root).  Device 0 gets
 // a sequential sweep, the kind a resilver or a scrub draws; the rest get
 // scattered reads and writes.
-func Demo(ctx context.Context, n int, interval time.Duration) ([]Disk, <-chan Frame, <-chan error) {
+func Demo(ctx context.Context, n, buckets int, interval time.Duration) ([]Disk, <-chan Frame, <-chan error) {
 	disks := make([]Disk, 0, n)
 	for i := 0; i < n; i++ {
 		disks = append(disks, Disk{
@@ -33,6 +33,10 @@ func Demo(ctx context.Context, n int, interval time.Duration) ([]Disk, <-chan Fr
 		defer tick.Stop()
 
 		sweep := 0
+		step := buckets / 300
+		if step < 1 {
+			step = 1
+		}
 		for {
 			select {
 			case <-ctx.Done():
@@ -44,28 +48,28 @@ func Demo(ctx context.Context, n int, interval time.Duration) ([]Disk, <-chan Fr
 			for i, d := range disks {
 				switch i % 3 {
 				case 0: // a sweep marching across the device
-					head := (sweep + i*40) % Buckets
-					for b := head; b < head+6 && b < Buckets; b++ {
+					head := (sweep + i*40*step) % buckets
+					for b := head; b < head+2*step && b < buckets; b++ {
 						f.Cells = append(f.Cells, Cell{d.Name, CmdRead, b, 16 << 20})
 					}
 					f.Stats = append(f.Stats, Stat{d.Name, CmdRead, 900, 96 << 20})
 				case 1: // scattered writes
 					for j := 0; j < 12; j++ {
-						f.Cells = append(f.Cells, Cell{d.Name, CmdWrite, rand.Intn(Buckets), int64(rand.Intn(1 << 20))})
+						f.Cells = append(f.Cells, Cell{d.Name, CmdWrite, rand.Intn(buckets), int64(rand.Intn(1 << 20))})
 					}
 					f.Stats = append(f.Stats, Stat{d.Name, CmdWrite, 120, 6 << 20})
 				case 2: // a busy region plus the odd trim
 					for j := 0; j < 20; j++ {
-						f.Cells = append(f.Cells, Cell{d.Name, CmdRead, Buckets/3 + rand.Intn(Buckets/8), int64(rand.Intn(4 << 20))})
+						f.Cells = append(f.Cells, Cell{d.Name, CmdRead, buckets/3 + rand.Intn(buckets/8), int64(rand.Intn(4 << 20))})
 					}
 					if rand.Intn(4) == 0 {
-						f.Cells = append(f.Cells, Cell{d.Name, CmdDelete, rand.Intn(Buckets), 1 << 20})
+						f.Cells = append(f.Cells, Cell{d.Name, CmdDelete, rand.Intn(buckets), 1 << 20})
 						f.Stats = append(f.Stats, Stat{d.Name, CmdDelete, 3, 1 << 20})
 					}
 					f.Stats = append(f.Stats, Stat{d.Name, CmdRead, 400, 40 << 20})
 				}
 			}
-			sweep = (sweep + 3) % Buckets
+			sweep = (sweep + step) % buckets
 
 			select {
 			case frames <- f:

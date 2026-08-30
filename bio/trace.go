@@ -11,10 +11,30 @@ import (
 	"sync"
 )
 
-// Buckets is how finely the io provider splits each device.  The kernel
-// aggregates into this many bins per device and the display downsamples
-// to whatever the terminal gives us.
-const Buckets = 1024
+// DefaultBuckets is how finely the io provider splits each device when
+// nothing else is asked for.  The kernel aggregates into this many bins per
+// device and the display downsamples to whatever the terminal gives us, so
+// this is the ceiling on how fine the map can ever be.
+const DefaultBuckets = 4096
+
+// BucketRange is what a bucket count is clamped to: below the first the map
+// is coarse whatever the terminal does, above the second dtrace is printing
+// more than the display can use.
+const (
+	MinBuckets = 256
+	MaxBuckets = 16384
+)
+
+// ClampBuckets rounds a wanted bucket count into range.
+func ClampBuckets(n int) int {
+	if n < MinBuckets {
+		return MinBuckets
+	}
+	if n > MaxBuckets {
+		return MaxBuckets
+	}
+	return n
+}
 
 // Command is a bio_cmd value; see /usr/lib/dtrace/io.d.
 type Command int
@@ -113,7 +133,7 @@ tick-%dms
 `
 
 // Script returns the D program that traces the given disks.
-func Script(disks []Disk, intervalMS int) string {
+func Script(disks []Disk, intervalMS, buckets int) string {
 	var table strings.Builder
 	for _, d := range disks {
 		fmt.Fprintf(&table, "\tmedia[\"%s\"] = %d;\n", d.Name, d.MediaSize)
@@ -123,13 +143,14 @@ func Script(disks []Disk, intervalMS int) string {
 	if half < 10 {
 		half = 10
 	}
-	return fmt.Sprintf(script, half, half, Buckets, table.String(), intervalMS)
+	return fmt.Sprintf(script, half, half, buckets, table.String(), intervalMS)
 }
 
 // Tracer runs dtrace and turns its output into frames.
 type Tracer struct {
 	Disks      []Disk
 	IntervalMS int
+	Buckets    int
 
 	cmd    *exec.Cmd
 	stderr strings.Builder
@@ -144,12 +165,16 @@ func (t *Tracer) Start(ctx context.Context) (<-chan Frame, <-chan error, error) 
 	if interval <= 0 {
 		interval = 100
 	}
+	buckets := t.Buckets
+	if buckets <= 0 {
+		buckets = DefaultBuckets
+	}
 
 	file, err := os.CreateTemp("", "blockio-*.d")
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := file.WriteString(Script(t.Disks, interval)); err != nil {
+	if _, err := file.WriteString(Script(t.Disks, interval, buckets)); err != nil {
 		file.Close()
 		os.Remove(file.Name())
 		return nil, nil, err
@@ -191,7 +216,7 @@ func (t *Tracer) Start(ctx context.Context) (<-chan Frame, <-chan error, error) 
 				frame = Frame{}
 				continue
 			}
-			parse(line, &frame)
+			parse(line, &frame, buckets)
 		}
 	}()
 
@@ -220,7 +245,7 @@ func (t *Tracer) Warnings() string {
 	return strings.TrimSpace(t.stderr.String())
 }
 
-func parse(line string, frame *Frame) {
+func parse(line string, frame *Frame, buckets int) {
 	f := strings.Fields(line)
 	if len(f) == 0 {
 		return
@@ -236,7 +261,7 @@ func parse(line string, frame *Frame) {
 		if err1 != nil || err2 != nil || err3 != nil {
 			return
 		}
-		if bucket < 0 || bucket >= Buckets {
+		if bucket < 0 || bucket >= buckets {
 			return
 		}
 		frame.Cells = append(frame.Cells, Cell{f[1], Command(cmd), bucket, bytes})

@@ -7,12 +7,12 @@ import (
 
 func TestParse(t *testing.T) {
 	var f Frame
-	parse("C ada0 1 512 4096", &f)
-	parse("C ada0 2 1023 8192", &f)
-	parse("C ada0 1 9999 8192", &f) // bucket out of range
-	parse("S ada0 2 12 49152", &f)
-	parse("junk", &f)
-	parse("C ada0 1 x 4096", &f)
+	parse("C ada0 1 512 4096", &f, 1024)
+	parse("C ada0 2 1023 8192", &f, 1024)
+	parse("C ada0 1 9999 8192", &f, 1024) // bucket out of range
+	parse("S ada0 2 12 49152", &f, 1024)
+	parse("junk", &f, 1024)
+	parse("C ada0 1 x 4096", &f, 1024)
 
 	want := []Cell{
 		{"ada0", CmdRead, 512, 4096},
@@ -32,11 +32,12 @@ func TestParse(t *testing.T) {
 }
 
 func TestScriptCarriesGeometry(t *testing.T) {
-	s := Script([]Disk{{Name: "ada0", MediaSize: 1000204886016}}, 100)
+	s := Script([]Disk{{Name: "ada0", MediaSize: 1000204886016}}, 100, 4096)
 	for _, want := range []string{
 		`media["ada0"] = 1000204886016;`,
 		`track["ada0"] = 1;`,
 		"tick-100ms",
+		"inline int BUCKETS = 4096;",
 		"int64_t media[string];",
 	} {
 		if !strings.Contains(s, want) {

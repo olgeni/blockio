@@ -103,8 +103,10 @@ var (
 	}
 	idleRGB = [3]float64{32, 32, 32}
 
-	ansi16     = [nCmds][2]int{idxRead: {32, 92}, idxWrite: {31, 91}, idxTrim: {33, 93}}
-	ansi16Idle = 90
+	ansi16 = [nCmds][2]int{idxRead: {32, 92}, idxWrite: {31, 91}, idxTrim: {33, 93}}
+	// Black rather than bright black: with half blocks the idle cells are
+	// most of the map, and a gray that heavy drowns out the activity.
+	ansi16Idle = 30
 
 	// Without color, density stands in for brightness.
 	monoRamp = [...]string{"░", "▒", "▓", "█"}

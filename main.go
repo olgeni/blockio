@@ -20,12 +20,14 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/olgeni/blockio/bio"
 	"github.com/olgeni/blockio/ui"
 )
 
 func main() {
+	def := ui.DefaultConfig()
 	var (
 		all      = flag.Bool("a", false, "watch every disk, without asking")
 		list     = flag.Bool("l", false, "list the disks and exit")
@@ -34,6 +36,14 @@ func main() {
 		window   = flag.Duration("for", 2*time.Second, "how long -once samples")
 		size     = flag.String("size", "100x30", "frame size for -once")
 		demo     = flag.Int("demo", 0, "synthesize N devices instead of tracing (for looking at layouts)")
+
+		color      = flag.String("color", "auto", "color: auto, truecolor, 256, 16, off")
+		scale      = flag.String("scale", "auto", "color scale: auto (per device) or fixed (thresholds)")
+		thresholds = flag.String("thresholds", "64K,512K,4M,32M", "hot/cold steps, bytes per second per cell")
+		decay      = flag.Duration("decay", def.HeatLife, "half-life of activity on the map")
+		trail      = flag.Duration("trail", def.TrailLife, "half-life of the trail (0 for none)")
+		buckets    = flag.Int("buckets", 0, "slices per device (0 fits the terminal)")
+		half       = flag.Bool("half", true, "half blocks: two rows of cells per terminal row")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [-a] [-l] [-i interval] [device ...]\n", os.Args[0])
@@ -41,19 +51,73 @@ func main() {
 	}
 	flag.Parse()
 
-	if err := run(*all, *list, *once, *demo, *interval, *window, *size, flag.Args()); err != nil {
+	// The config file sets defaults; flags actually given beat it.
+	cfg := def
+	warnings := loadConfig(configPath(), &cfg, interval)
+
+	set := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	for name, value := range map[string]string{
+		"color": *color, "scale": *scale, "thresholds": *thresholds,
+	} {
+		if set[name] {
+			if err := setOption(&cfg, interval, name, value); err != nil {
+				warnings = append(warnings, err.Error())
+			}
+		}
+	}
+	if set["decay"] {
+		cfg.HeatLife = *decay
+	}
+	if set["trail"] {
+		cfg.TrailLife = *trail
+	}
+	if set["buckets"] {
+		cfg.Buckets = bio.ClampBuckets(*buckets)
+	}
+	if set["half"] {
+		cfg.HalfBlocks = *half
+	}
+	if !set["buckets"] && cfg.Buckets == def.Buckets {
+		cfg.Buckets = autoBuckets(cfg.HalfBlocks)
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "blockio: %s\n", w)
+	}
+
+	if err := run(*all, *list, *once, *demo, *interval, *window, *size, cfg, flag.Args()); err != nil {
 		fmt.Fprintf(os.Stderr, "blockio: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(all, list, once bool, demo int, interval, window time.Duration, size string, args []string) error {
+// autoBuckets asks for about as many slices per device as the terminal can
+// draw, so the map is not coarser than the screen.  The kernel aggregates
+// into these bins, so this is fixed for the run: resize much larger and the
+// map goes blocky until the next start.
+func autoBuckets(halfBlocks bool) int {
+	width, height, err := term.GetSize(os.Stdout.Fd())
+	if err != nil || width <= 0 || height <= 0 {
+		return bio.DefaultBuckets
+	}
+	rows := height
+	if halfBlocks {
+		rows *= 2
+	}
+	want := 1
+	for want < width*rows {
+		want <<= 1
+	}
+	return bio.ClampBuckets(want)
+}
+
+func run(all, list, once bool, demo int, interval, window time.Duration, size string, cfg ui.Config, args []string) error {
 	if demo > 0 {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		disks, frames, errs := bio.Demo(ctx, demo, interval)
-		model := ui.New(disks, frames, errs, interval)
+		disks, frames, errs := bio.Demo(ctx, demo, cfg.Buckets, interval)
+		model := ui.New(disks, frames, errs, interval, cfg)
 		if once {
 			return sample(&model, frames, errs, window, size)
 		}
@@ -92,13 +156,17 @@ func run(all, list, once bool, demo int, interval, window time.Duration, size st
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tracer := &bio.Tracer{Disks: watch, IntervalMS: int(interval.Milliseconds())}
+	tracer := &bio.Tracer{
+		Disks:      watch,
+		IntervalMS: int(interval.Milliseconds()),
+		Buckets:    cfg.Buckets,
+	}
 	frames, errs, err := tracer.Start(ctx)
 	if err != nil {
 		return err
 	}
 
-	model := ui.New(watch, frames, errs, interval)
+	model := ui.New(watch, frames, errs, interval, cfg)
 	if once {
 		return sample(&model, frames, errs, window, size)
 	}

@@ -168,3 +168,28 @@ func TestPaintKeepsColorSpacesApart(t *testing.T) {
 		t.Errorf("rgb fg = %q, want %q", got, want)
 	}
 }
+
+func TestZoomHighlightsWhicheverDeviceIsFocused(t *testing.T) {
+	var disks []bio.Disk
+	for i := 0; i < 3; i++ {
+		disks = append(disks, bio.Disk{Name: fmt.Sprintf("ada%d", i), MediaSize: 1 << 40, Rotation: -1})
+	}
+	m := testModel(disks...)
+
+	// The border color is the tell: zooming any device must look the same,
+	// not just the one whose index happens to match the pane position.
+	plain := m.View()
+	for i := range disks {
+		m.focus = i
+		zoomed := m.View()
+		if strings.Count(zoomed, "╭") != 1 {
+			t.Fatalf("zoom on %s did not narrow to one pane", disks[i].Name)
+		}
+		if !strings.Contains(zoomed, "\x1b[38;5;81m") {
+			t.Errorf("zoom on %s has no accent border", disks[i].Name)
+		}
+	}
+	if strings.Contains(plain, "\x1b[38;5;81m") {
+		t.Error("unzoomed grid should not paint an accent border")
+	}
+}

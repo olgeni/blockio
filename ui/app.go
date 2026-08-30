@@ -459,14 +459,21 @@ func (m Model) grid(devs []*device, width, height int) string {
 			if r == rows-1 {
 				h = height - paneH*(rows-1)
 			}
-			row = append(row, m.pane(devs[i], i, w, h))
+			row = append(row, m.pane(devs[i], w, h))
 		}
 		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, row...))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
-func (m Model) pane(dev *device, i, width, height int) string {
+// focused reports whether dev is the zoomed device. The grid hands out slice
+// positions, which stop matching m.focus as soon as the slice is narrowed to
+// the zoomed pane, so match on the device itself.
+func (m Model) focused(dev *device) bool {
+	return m.focus >= 0 && m.focus < len(m.devs) && m.devs[m.focus] == dev
+}
+
+func (m Model) pane(dev *device, width, height int) string {
 	inner := width - 2
 	innerH := height - 2
 	if inner < 4 || innerH < 3 {
@@ -474,7 +481,7 @@ func (m Model) pane(dev *device, i, width, height int) string {
 	}
 
 	style := stylePane
-	if m.focus == i {
+	if m.focused(dev) {
 		style = stylePaneFocus
 	}
 

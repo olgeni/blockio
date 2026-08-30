@@ -27,22 +27,6 @@ sequential band each, a burst of writes through the pool, and a little TRIM.
 `doc/screenshot.sh` regenerates it: `-once` prints a frame, `freeze` turns it
 into a PNG.
 
-Without color (`-color off`), so it survives a paste into a README: one
-device, four seconds of scattered reads.
-
-```
- blockio  1 device  scale auto
-+--------------------------------------------------------------------+
-|ada0  932G  Samsung SSD 870 EVO 1TB                                 |
-|R 416M/s 416 iops  W 1B/s 0.0 iops  T 0B/s 0.0 iops   1.5G total    |
-| ░░░░░ ░░   ░ ░░░░░░░░   ░ ░ ░░  ░░  ░ ░░ ░ ░░░░ ░░ ░░  ░ ░░░░    ░░|
-|░  ░ ░░░░░░░░   ░ ░░░░░░ ░░░  ░ ░   ░░░░ ░░▒█ ░░░░░ ░░░░ ░░░░ ░░░░░░|
-|░░░ ░░   ░░░░░░░ ░░░░░░ ░░ ░ ░ ░░░░░░░ ░░ ░░ ░ ░░░░ ░░░ ░ ░░ ░ ░░  ░|
-|░░░░ ░░ ░░░  ░░░ ░  ░░  ░ ░  ░░░░░░ ░░░  ░░░ ░░░░░░ ░ ░░░ ░░░░░░ ░ ░|
-|░░░░░░░░░░░░░░░  ░    ░  ░░ ░ ░░░░░░░░  ░    ░ ░░                  ░|
-+--------------------------------------------------------------------+
-```
-
 ## The map
 
 Each pane is one device. Cell 0 is LBA 0 in the top left, and cells run left

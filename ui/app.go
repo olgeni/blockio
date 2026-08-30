@@ -673,8 +673,7 @@ func (m Model) scaleLabel() string {
 func (m Model) footer() string {
 	legend := styleRead.Render("█ read") + "  " +
 		styleWrite.Render("█ write") + "  " +
-		styleTrim.Render("█ trim") + "  " +
-		styleMuted.Render("█ idle")
+		styleTrim.Render("█ trim")
 	keys := styleMuted.Render("space pause · c clear · s scale · +/- thresholds · 1-9 one · 0 all · q quit")
 	gap := m.width - lipgloss.Width(legend) - lipgloss.Width(keys)
 	if gap < 2 {

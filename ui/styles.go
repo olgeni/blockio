@@ -94,14 +94,17 @@ var (
 		idxTrim:  {94, 136, 178, 214, 220},
 	}
 	trail256 = [nCmds]int{idxRead: 22, idxWrite: 52, idxTrim: 58}
-	idle256  = 236
+	// Black everywhere an idle cell is drawn: the map sits on the
+	// terminal's own background rather than on a gray of our choosing.
+	// 16 is the color cube's black, which no theme repaints.
+	idle256 = 16
 
 	rampRGB = [nCmds][2][3]float64{
 		idxRead:  {{6, 40, 14}, {96, 255, 118}},
 		idxWrite: {{48, 8, 8}, {255, 96, 84}},
 		idxTrim:  {{48, 34, 4}, {255, 202, 64}},
 	}
-	idleRGB = [3]float64{32, 32, 32}
+	idleRGB = [3]float64{0, 0, 0}
 
 	ansi16 = [nCmds][2]int{idxRead: {32, 92}, idxWrite: {31, 91}, idxTrim: {33, 93}}
 	// Black rather than bright black: with half blocks the idle cells are

@@ -5,6 +5,7 @@ package ui
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,31 +23,118 @@ const (
 	nCmds
 )
 
+const trailFloor = 0.04
+
+// Scale decides how a cell's byte rate becomes a step on the color ramp.
+type Scale int
+
 const (
-	heatDecay  = 0.55  // per frame: activity fades over about half a second
-	trailDecay = 0.997 // per frame: where the head has been, for minutes
-	trailFloor = 0.04
-	levels     = 5
+	// ScaleAuto measures each device against its own busiest cell, so a
+	// quiet disk still shows structure.
+	ScaleAuto Scale = iota
+	// ScaleFixed compares against the configured thresholds, so the same
+	// color means the same rate on every device and at every moment.
+	ScaleFixed
 )
+
+func (s Scale) String() string {
+	if s == ScaleFixed {
+		return "fixed"
+	}
+	return "auto"
+}
+
+// Config is what the display lets you tune: where hot turns into cold, and
+// how long activity stays on the map.
+type Config struct {
+	Scale      Scale
+	Thresholds []float64     // bytes per second, per cell, ascending
+	HeatLife   time.Duration // half-life of activity
+	TrailLife  time.Duration // half-life of the trail, 0 for none
+	Color      ColorMode
+	Buckets    int  // how finely each device is split
+	HalfBlocks bool // two data rows per terminal row
+}
+
+// DefaultConfig is a ramp that suits a mixed workload on a single disk.
+func DefaultConfig() Config {
+	return Config{
+		Scale:      ScaleAuto,
+		Thresholds: []float64{64 << 10, 512 << 10, 4 << 20, 32 << 20},
+		HeatLife:   500 * time.Millisecond,
+		TrailLife:  60 * time.Second,
+		Color:      ColorAuto,
+		Buckets:    bio.DefaultBuckets,
+		HalfBlocks: true,
+	}
+}
+
+// ParseThresholds reads "64K,512K,4M,32M" into bytes per second.  Up to
+// eight steps, ascending; the ramp is stretched over however many there are.
+func ParseThresholds(s string) ([]float64, error) {
+	var out []float64
+	for _, field := range strings.Split(s, ",") {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		n, err := parseSize(field)
+		if err != nil {
+			return nil, err
+		}
+		if len(out) > 0 && n <= out[len(out)-1] {
+			return nil, fmt.Errorf("thresholds must ascend: %s", s)
+		}
+		out = append(out, n)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no thresholds in %q", s)
+	}
+	if len(out) > 8 {
+		return nil, fmt.Errorf("at most 8 thresholds, got %d", len(out))
+	}
+	return out, nil
+}
+
+func parseSize(s string) (float64, error) {
+	mult := 1.0
+	if len(s) > 0 {
+		switch unit := s[len(s)-1]; unit {
+		case 'k', 'K':
+			mult, s = 1<<10, s[:len(s)-1]
+		case 'm', 'M':
+			mult, s = 1<<20, s[:len(s)-1]
+		case 'g', 'G':
+			mult, s = 1<<30, s[:len(s)-1]
+		case 'b', 'B':
+			s = s[:len(s)-1]
+		}
+	}
+	n, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("bad size %q", s)
+	}
+	return n * mult, nil
+}
 
 // device holds everything drawn for one disk.
 type device struct {
 	disk bio.Disk
 
-	heat  [nCmds][]float64 // recent bytes per bucket, decaying
+	heat  [nCmds][]float64 // smoothed bytes per second, per bucket
 	trail [nCmds][]float64 // "has been here", decaying slowly
-	peak  float64          // rolling maximum, so the ramp is self-scaling
+	peak  float64          // rolling maximum, for ScaleAuto
 
 	rate [nCmds]float64 // bytes/s, smoothed
 	iops [nCmds]float64
 	seen [nCmds]int64 // bytes since start
 }
 
-func newDevice(d bio.Disk) *device {
+func newDevice(d bio.Disk, buckets int) *device {
 	dev := &device{disk: d}
 	for i := range dev.heat {
-		dev.heat[i] = make([]float64, bio.Buckets)
-		dev.trail[i] = make([]float64, bio.Buckets)
+		dev.heat[i] = make([]float64, buckets)
+		dev.trail[i] = make([]float64, buckets)
 	}
 	return dev
 }
@@ -59,6 +147,7 @@ type Model struct {
 	frames   <-chan bio.Frame
 	errs     <-chan error
 	interval time.Duration
+	cfg      Config
 
 	width, height int
 	paused        bool
@@ -73,18 +162,36 @@ type errMsg struct{ err error }
 type closedMsg struct{}
 
 // New builds a model over the given disks, fed by the given channels.
-func New(disks []bio.Disk, frames <-chan bio.Frame, errs <-chan error, interval time.Duration) Model {
+func New(disks []bio.Disk, frames <-chan bio.Frame, errs <-chan error, interval time.Duration, cfg Config) Model {
+	def := DefaultConfig()
+	if len(cfg.Thresholds) == 0 {
+		cfg.Thresholds = def.Thresholds
+	}
+	if cfg.HeatLife <= 0 {
+		cfg.HeatLife = def.HeatLife
+	}
+	if cfg.Color == ColorAuto {
+		cfg.Color = DetectColor()
+	}
+	if cfg.Buckets <= 0 {
+		cfg.Buckets = def.Buckets
+	}
+	cfg.Buckets = bio.ClampBuckets(cfg.Buckets)
+	if cfg.Color == ColorNone {
+		cfg.HalfBlocks = false // half blocks need a background color
+	}
 	m := Model{
 		frames:   frames,
 		errs:     errs,
 		interval: interval,
+		cfg:      cfg,
 		focus:    -1,
 		index:    make(map[string]*device, len(disks)),
 		width:    100,
 		height:   30,
 	}
 	for _, d := range disks {
-		dev := newDevice(d)
+		dev := newDevice(d, cfg.Buckets)
 		m.devs = append(m.devs, dev)
 		m.index[d.Name] = dev
 	}
@@ -131,6 +238,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clear()
 		case "0", "a":
 			m.focus = -1
+		case "s":
+			if m.cfg.Scale == ScaleAuto {
+				m.cfg.Scale = ScaleFixed
+			} else {
+				m.cfg.Scale = ScaleAuto
+			}
+		case "+", "=", "-", "_":
+			factor := 2.0
+			if key == "-" || key == "_" {
+				factor = 0.5
+			}
+			for i := range m.cfg.Thresholds {
+				m.cfg.Thresholds[i] *= factor
+			}
+			m.cfg.Scale = ScaleFixed
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 			if n := int(key[0] - '1'); n < len(m.devs) {
 				if m.focus == n {
@@ -170,14 +292,19 @@ func (m *Model) Apply(f bio.Frame) {
 		seconds = 0.1
 	}
 
+	heatKeep := halfLifeFactor(m.cfg.HeatLife, m.interval)
+	trailKeep := halfLifeFactor(m.cfg.TrailLife, m.interval)
+
 	for _, dev := range m.devs {
 		for i := 0; i < nCmds; i++ {
-			decay(dev.heat[i], heatDecay)
-			decay(dev.trail[i], trailDecay)
+			decay(dev.heat[i], heatKeep)
+			decay(dev.trail[i], trailKeep)
 		}
-		dev.peak *= 0.98
+		dev.peak *= heatKeep
 	}
 
+	// heat is a smoothed byte rate per bucket, so a threshold in bytes per
+	// second means the same thing whatever the sampling interval is.
 	for _, c := range f.Cells {
 		dev, ok := m.index[c.Dev]
 		if !ok {
@@ -187,7 +314,7 @@ func (m *Model) Apply(f bio.Frame) {
 		if !ok || c.Bucket >= len(dev.heat[i]) {
 			continue
 		}
-		dev.heat[i][c.Bucket] += float64(c.Bytes)
+		dev.heat[i][c.Bucket] += (1 - heatKeep) * float64(c.Bytes) / seconds
 		dev.trail[i][c.Bucket] = 1
 		if v := dev.heat[i][c.Bucket]; v > dev.peak {
 			dev.peak = v
@@ -239,6 +366,18 @@ func (m *Model) clear() {
 		}
 		dev.peak = 0
 	}
+}
+
+// halfLifeFactor is what to multiply by each frame for a given half-life;
+// a half-life of zero means "do not keep it at all".
+func halfLifeFactor(halfLife, interval time.Duration) float64 {
+	if halfLife <= 0 {
+		return 0
+	}
+	if interval <= 0 {
+		interval = 100 * time.Millisecond
+	}
+	return math.Pow(0.5, interval.Seconds()/halfLife.Seconds())
 }
 
 func decay(v []float64, factor float64) {
@@ -347,7 +486,7 @@ func (m Model) pane(dev *device, i, width, height int) string {
 		styleDevice.Render(truncate(title, inner)),
 		truncate(m.stats(dev), inner),
 	}
-	body = append(body, renderMap(dev, inner, innerH-len(body))...)
+	body = append(body, renderMap(dev, inner, innerH-len(body), m.cfg)...)
 
 	return style.Width(inner).Height(innerH).Render(strings.Join(body, "\n"))
 }
@@ -366,51 +505,85 @@ func (m Model) stats(dev *device) string {
 }
 
 // renderMap draws the device: every cell is a slice of the address space,
-// left to right and top to bottom, LBA 0 first.
-func renderMap(dev *device, width, rows int) []string {
+// left to right and top to bottom, LBA 0 first.  With half blocks each
+// terminal row carries two rows of cells, the top half in the foreground
+// color and the bottom half in the background one.
+func renderMap(dev *device, width, rows int, cfg Config) []string {
 	if rows < 1 || width < 1 {
 		return nil
 	}
-	cells := width * rows
+
+	perRow := 1
+	if cfg.HalfBlocks {
+		perRow = 2
+	}
+	cells := width * rows * perRow
+	buckets := len(dev.heat[idxRead])
+
+	at := func(cell int) paint {
+		lo := cell * buckets / cells
+		hi := (cell + 1) * buckets / cells
+		if hi <= lo {
+			hi = lo + 1
+		}
+		if hi > buckets {
+			hi = buckets
+		}
+		cmd, heat, active := cellHeat(dev, lo, hi, cfg)
+		return paintOf(cfg.Color, cmd, heat, active)
+	}
 
 	out := make([]string, 0, rows)
 	var line strings.Builder
 	for r := 0; r < rows; r++ {
 		line.Reset()
-		last := -1
+		// Foreground and background are tracked apart, so a run of cells
+		// over the same background only pays for the halves that change.
+		lastFG, lastBG := "", ""
 		for c := 0; c < width; c++ {
-			cell := r*width + c
-			lo := cell * bio.Buckets / cells
-			hi := (cell + 1) * bio.Buckets / cells
-			if hi <= lo {
-				hi = lo + 1
+			if !cfg.HalfBlocks {
+				p := at(r*width + c)
+				if esc := p.fg(); esc != lastFG {
+					line.WriteString(esc)
+					lastFG = esc
+				}
+				if p.kind == paintMono {
+					line.WriteString(p.mono)
+				} else {
+					line.WriteString(blockFull)
+				}
+				continue
 			}
-			if hi > bio.Buckets {
-				hi = bio.Buckets
+			top := at((2*r)*width + c)
+			bottom := at((2*r+1)*width + c)
+			if esc := top.fg(); esc != lastFG {
+				line.WriteString(esc)
+				lastFG = esc
 			}
-
-			color := cellColor(dev, lo, hi)
-			if color != last {
-				fmt.Fprintf(&line, "\x1b[38;5;%dm", color)
-				last = color
+			if esc := bottom.bg(); esc != lastBG {
+				line.WriteString(esc)
+				lastBG = esc
 			}
-			line.WriteString(blockFull)
+			line.WriteString(blockUpper)
 		}
-		line.WriteString("\x1b[0m")
+		if lastFG != "" || lastBG != "" {
+			line.WriteString(escReset)
+		}
 		out = append(out, line.String())
 	}
 	return out
 }
 
-// cellColor picks the loudest command in the cell's bucket range and turns
-// its share of the device's rolling peak into a step on that ramp.
-func cellColor(dev *device, lo, hi int) int {
-	var heat [nCmds]float64
+// cellHeat picks the loudest command in the cell's bucket range and turns
+// its byte rate into a 0..1 position on that command's ramp.  A cell with
+// no current activity reports its trail instead.
+func cellHeat(dev *device, lo, hi int, cfg Config) (cmd int, heat float64, active bool) {
+	var rate [nCmds]float64
 	var trail [nCmds]float64
 	for i := 0; i < nCmds; i++ {
 		for b := lo; b < hi; b++ {
-			if v := dev.heat[i][b]; v > heat[i] {
-				heat[i] = v
+			if v := dev.heat[i][b]; v > rate[i] {
+				rate[i] = v
 			}
 			if v := dev.trail[i][b]; v > trail[i] {
 				trail[i] = v
@@ -420,32 +593,12 @@ func cellColor(dev *device, lo, hi int) int {
 
 	best, bestVal := -1, 0.0
 	for i := 0; i < nCmds; i++ {
-		if heat[i] > bestVal {
-			best, bestVal = i, heat[i]
+		if rate[i] > bestVal {
+			best, bestVal = i, rate[i]
 		}
 	}
 	if best >= 0 && bestVal > 0 {
-		peak := dev.peak
-		if peak <= 0 {
-			peak = bestVal
-		}
-		// Square root: a trickle of metadata should still be visible next
-		// to a resilver saturating the disk.
-		step := int(math.Sqrt(bestVal/peak)*float64(levels-1) + 0.5)
-		if step < 0 {
-			step = 0
-		}
-		if step >= levels {
-			step = levels - 1
-		}
-		switch best {
-		case idxRead:
-			return rampRead[step]
-		case idxWrite:
-			return rampWrite[step]
-		default:
-			return rampTrim[step]
-		}
+		return best, heatLevel(bestVal, dev.peak, cfg), true
 	}
 
 	best, bestVal = -1, trailFloor
@@ -455,9 +608,30 @@ func cellColor(dev *device, lo, hi int) int {
 		}
 	}
 	if best >= 0 {
-		return trailColor[best]
+		return best, 0, false
 	}
-	return idleColor
+	return -1, 0, false
+}
+
+// heatLevel places a byte rate on the 0..1 ramp, either against the
+// configured thresholds or against the device's own busiest cell.
+func heatLevel(rate, peak float64, cfg Config) float64 {
+	if cfg.Scale == ScaleFixed && len(cfg.Thresholds) > 0 {
+		step := 0
+		for _, t := range cfg.Thresholds {
+			if rate < t {
+				break
+			}
+			step++
+		}
+		return float64(step) / float64(len(cfg.Thresholds))
+	}
+	if peak <= 0 {
+		peak = rate
+	}
+	// Square root: a trickle of metadata should still be visible next to a
+	// resilver saturating the disk.
+	return math.Min(1, math.Sqrt(rate/peak))
 }
 
 func (m Model) header() string {
@@ -470,6 +644,7 @@ func (m Model) header() string {
 		what += ", showing " + m.devs[m.focus].disk.Name
 	}
 	line := title + styleMuted.Render(what)
+	line += styleMuted.Render("  scale " + m.scaleLabel())
 	if m.paused {
 		line += "  " + stylePause.Render("PAUSED")
 	}
@@ -479,12 +654,24 @@ func (m Model) header() string {
 	return line
 }
 
+// scaleLabel says what the colors are measured against.
+func (m Model) scaleLabel() string {
+	if m.cfg.Scale == ScaleAuto {
+		return "auto"
+	}
+	steps := make([]string, 0, len(m.cfg.Thresholds))
+	for _, t := range m.cfg.Thresholds {
+		steps = append(steps, bio.HumanBytes(int64(t)))
+	}
+	return strings.Join(steps, "/") + "/s"
+}
+
 func (m Model) footer() string {
 	legend := styleRead.Render("█ read") + "  " +
 		styleWrite.Render("█ write") + "  " +
 		styleTrim.Render("█ trim") + "  " +
 		styleMuted.Render("█ idle")
-	keys := styleMuted.Render("space pause · c clear · 1-9 one device · 0 all · q quit")
+	keys := styleMuted.Render("space pause · c clear · s scale · +/- thresholds · 1-9 one · 0 all · q quit")
 	gap := m.width - lipgloss.Width(legend) - lipgloss.Width(keys)
 	if gap < 2 {
 		return legend

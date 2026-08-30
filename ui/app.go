@@ -173,6 +173,10 @@ func New(disks []bio.Disk, frames <-chan bio.Frame, errs <-chan error, interval 
 	if cfg.Color == ColorAuto {
 		cfg.Color = DetectColor()
 	}
+	// The map writes its own escapes, but the chrome around it goes through
+	// lipgloss, which decides on its own what the terminal can do: tell it,
+	// so that a forced -color (or a frame piped somewhere) keeps its colors.
+	applyColorProfile(cfg.Color)
 	if cfg.Buckets <= 0 {
 		cfg.Buckets = def.Buckets
 	}

@@ -71,6 +71,20 @@ func DetectColor() ColorMode {
 	}
 }
 
+// applyColorProfile points lipgloss at the depth the map is drawn in.
+func applyColorProfile(mode ColorMode) {
+	switch mode {
+	case ColorTrue:
+		lipgloss.SetColorProfile(termenv.TrueColor)
+	case Color256:
+		lipgloss.SetColorProfile(termenv.ANSI256)
+	case Color16:
+		lipgloss.SetColorProfile(termenv.ANSI)
+	case ColorNone:
+		lipgloss.SetColorProfile(termenv.Ascii)
+	}
+}
+
 // The three tracked commands, coldest to hottest.  The 256-color ramps are
 // picked from the cube; truecolor interpolates between the endpoints.
 var (

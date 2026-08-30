@@ -22,10 +22,10 @@ It needs root (for `dtrace(1)` and `diskinfo(8)`) and the DTrace modules:
 
 ![two mirror halves under load](doc/main.png)
 
-Both halves of a ZFS mirror, five seconds of scattered reads with one
-sequential band each, a burst of writes through the pool, and a little TRIM.
-`doc/screenshot.sh` regenerates it: `-once` prints a frame, `freeze` turns it
-into a PNG.
+Both halves of a ZFS mirror under a real workload: five seconds at about
+450MB/s, mostly scattered reads, with a band of writes running through them
+and one sequential streak. `doc/screenshot.sh` regenerates it: `-once` prints
+a frame, `freeze` turns it into a PNG.
 
 ## The map
 

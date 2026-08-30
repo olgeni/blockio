@@ -4,9 +4,9 @@
 # resilver, or a few dd(1) readers scattered over the devices.  freeze(1)
 # comes from sysutils/freeze.
 #
-# The background is set to the map's idle color because freeze draws each
-# run of background color half a character short, which otherwise leaves
-# thin dark slivers where the color changes.
+# The background is set to black, the color of an idle cell, because freeze
+# draws each run of background color half a character short, which otherwise
+# leaves thin slivers where the color changes.
 
 set -e
 cd "$(dirname "$0")/.."
@@ -22,4 +22,4 @@ freeze doc/main.ansi -o doc/main.png \
 	--border.radius 8 \
 	--shadow.blur 24 \
 	--shadow.y 12 \
-	--background "#202020"
+	--background "#000000"

@@ -7,6 +7,9 @@
 # The background is set to black, the color of an idle cell, because freeze
 # draws each run of background color half a character short, which otherwise
 # leaves thin slivers where the color changes.
+#
+# pngquant takes the result from about 1.3MB to 100KB; the map is a handful
+# of colors on black, so the palette costs nothing visible.
 
 set -e
 cd "$(dirname "$0")/.."
@@ -23,3 +26,5 @@ freeze doc/main.ansi -o doc/main.png \
 	--shadow.blur 24 \
 	--shadow.y 12 \
 	--background "#000000"
+
+pngquant --quality 70-95 --speed 1 --force --output doc/main.png -- doc/main.png

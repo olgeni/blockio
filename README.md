@@ -27,16 +27,20 @@ sequential band each, a burst of writes through the pool, and a little TRIM.
 `doc/screenshot.sh` regenerates it: `-once` prints a frame, `freeze` turns it
 into a PNG.
 
-Without color, so it survives a paste into a README, one device mid-sweep:
+Without color (`-color off`), so it survives a paste into a README: one
+device, four seconds of scattered reads.
 
 ```
-╭────────────────────────────────────────────────────────────────────╮
-│ada0  932G  Samsung SSD 870 EVO 1TB                                 │
-│R 515M/s 515 iops  W 25K/s 1.4 iops  T 9.6M/s 65 iops   1.4G total  │
-│···········································▒▓███▓▒··················│
-│····················································                │
-│                                                                    │
-╰────────────────────────────────────────────────────────────────────╯
+ blockio  1 device  scale auto
++--------------------------------------------------------------------+
+|ada0  932G  Samsung SSD 870 EVO 1TB                                 |
+|R 416M/s 416 iops  W 1B/s 0.0 iops  T 0B/s 0.0 iops   1.5G total    |
+| ░░░░░ ░░   ░ ░░░░░░░░   ░ ░ ░░  ░░  ░ ░░ ░ ░░░░ ░░ ░░  ░ ░░░░    ░░|
+|░  ░ ░░░░░░░░   ░ ░░░░░░ ░░░  ░ ░   ░░░░ ░░▒█ ░░░░░ ░░░░ ░░░░ ░░░░░░|
+|░░░ ░░   ░░░░░░░ ░░░░░░ ░░ ░ ░ ░░░░░░░ ░░ ░░ ░ ░░░░ ░░░ ░ ░░ ░ ░░  ░|
+|░░░░ ░░ ░░░  ░░░ ░  ░░  ░ ░  ░░░░░░ ░░░  ░░░ ░░░░░░ ░ ░░░ ░░░░░░ ░ ░|
+|░░░░░░░░░░░░░░░  ░    ░  ░░ ░ ░░░░░░░░  ░    ░ ░░                  ░|
++--------------------------------------------------------------------+
 ```
 
 ## The map

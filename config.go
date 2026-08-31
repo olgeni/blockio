@@ -34,7 +34,7 @@ func configPath() string {
 
 // loadConfig folds the config file into cfg.  A missing file is not an
 // error; a bad line is a warning, never fatal.
-func loadConfig(path string, cfg *ui.Config, interval *time.Duration) []string {
+func loadConfig(path string, cfg *ui.Config, interval *time.Duration, kind *bio.SourceKind) []string {
 	if path == "" {
 		return nil
 	}
@@ -63,7 +63,7 @@ func loadConfig(path string, cfg *ui.Config, interval *time.Duration) []string {
 			warnings = append(warnings, fmt.Sprintf("%s:%d: not an option = value line", path, line))
 			continue
 		}
-		if err := setOption(cfg, interval, strings.TrimSpace(key), strings.TrimSpace(value)); err != nil {
+		if err := setOption(cfg, interval, kind, strings.TrimSpace(key), strings.TrimSpace(value)); err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s:%d: %v", path, line, err))
 		}
 	}
@@ -71,7 +71,7 @@ func loadConfig(path string, cfg *ui.Config, interval *time.Duration) []string {
 }
 
 // setOption applies one "key = value" pair; the flags use the same parsers.
-func setOption(cfg *ui.Config, interval *time.Duration, key, value string) error {
+func setOption(cfg *ui.Config, interval *time.Duration, kind *bio.SourceKind, key, value string) error {
 	switch key {
 	case "color":
 		mode, err := ui.ParseColorMode(value)
@@ -119,6 +119,12 @@ func setOption(cfg *ui.Config, interval *time.Duration, key, value string) error
 			return err
 		}
 		cfg.HalfBlocks = on
+	case "source":
+		k, err := bio.ParseSourceKind(value)
+		if err != nil {
+			return err
+		}
+		*kind = k
 	case "interval":
 		d, err := time.ParseDuration(value)
 		if err != nil || d <= 0 {

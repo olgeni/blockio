@@ -5,8 +5,9 @@
 //	blockio ada0 ada1       watch these
 //	blockio -a              watch every disk
 //
-// It reads the io provider through dtrace(1), so it needs root and the
-// dtrace modules (kldload dtraceall).
+// It needs root either way, and on FreeBSD the dtrace modules as well
+// (kldload dtraceall): the io provider is read through dtrace(1).  On macOS
+// it reads fs_usage(1) instead, which needs nothing turned off.
 package main
 
 import (
@@ -36,6 +37,7 @@ func main() {
 		window   = flag.Duration("for", 2*time.Second, "how long -once samples")
 		size     = flag.String("size", "100x30", "frame size for -once")
 		demo     = flag.Int("demo", 0, "synthesize N devices instead of tracing (for looking at layouts)")
+		source   = flag.String("source", "auto", "where the I/O comes from: auto, dtrace, fsusage (macOS)")
 
 		color      = flag.String("color", "auto", "color: auto, truecolor, 256, 16, off")
 		scale      = flag.String("scale", "auto", "color scale: auto (per device) or fixed (thresholds)")
@@ -53,15 +55,17 @@ func main() {
 
 	// The config file sets defaults; flags actually given beat it.
 	cfg := def
-	warnings := loadConfig(configPath(), &cfg, interval)
+	kind := bio.SourceAuto
+	warnings := loadConfig(configPath(), &cfg, interval, &kind)
 
 	set := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	for name, value := range map[string]string{
 		"color": *color, "scale": *scale, "thresholds": *thresholds,
+		"source": *source,
 	} {
 		if set[name] {
-			if err := setOption(&cfg, interval, name, value); err != nil {
+			if err := setOption(&cfg, interval, &kind, name, value); err != nil {
 				warnings = append(warnings, err.Error())
 			}
 		}
@@ -85,7 +89,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "blockio: %s\n", w)
 	}
 
-	if err := run(*all, *list, *once, *demo, *interval, *window, *size, cfg, flag.Args()); err != nil {
+	if err := run(*all, *list, *once, *demo, kind, *interval, *window, *size, cfg, flag.Args()); err != nil {
 		fmt.Fprintf(os.Stderr, "blockio: %v\n", err)
 		os.Exit(1)
 	}
@@ -111,7 +115,7 @@ func autoBuckets(halfBlocks bool) int {
 	return bio.ClampBuckets(want)
 }
 
-func run(all, list, once bool, demo int, interval, window time.Duration, size string, cfg ui.Config, args []string) error {
+func run(all, list, once bool, demo int, kind bio.SourceKind, interval, window time.Duration, size string, cfg ui.Config, args []string) error {
 	if demo > 0 {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -149,19 +153,18 @@ func run(all, list, once bool, demo int, interval, window time.Duration, size st
 		return nil // nothing picked
 	}
 
-	if err := checkDtrace(); err != nil {
+	if err := bio.CheckSource(kind); err != nil {
+		return err
+	}
+	source, err := bio.NewSource(kind, watch, int(interval.Milliseconds()), cfg.Buckets)
+	if err != nil {
 		return err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tracer := &bio.Tracer{
-		Disks:      watch,
-		IntervalMS: int(interval.Milliseconds()),
-		Buckets:    cfg.Buckets,
-	}
-	frames, errs, err := tracer.Start(ctx)
+	frames, errs, err := source.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -227,17 +230,6 @@ func choose(disks []bio.Disk, args []string, all bool) ([]bio.Disk, error) {
 		out = append(out, byName[name])
 	}
 	return out, nil
-}
-
-// checkDtrace explains the two usual reasons dtrace will not start.
-func checkDtrace() error {
-	if os.Geteuid() != 0 {
-		return errors.New("needs root for dtrace(1): try sudo blockio")
-	}
-	if _, err := os.Stat("/dev/dtrace"); err != nil {
-		return errors.New("/dev/dtrace is missing: kldload dtraceall")
-	}
-	return nil
 }
 
 // sample drives the model without a terminal, for -once.

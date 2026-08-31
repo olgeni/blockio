@@ -34,18 +34,21 @@ a frame, `freeze` turns it into a PNG.
 
 Each pane is one device. Cell 0 is LBA 0 in the top left, and cells run left
 to right and top to bottom, so the whole device always fits the pane however
-large it is. Position is by byte offset against the media size `diskinfo(8)`
-reports, which is why a `zpool scrub` reads as a band sweeping down the pane
-and a random workload reads as noise.
+large it is. Position is by byte offset against the media size the system
+reports — `diskinfo(8)` on FreeBSD, `diskutil(8)` on macOS — which is why a
+`zpool scrub` reads as a band sweeping down the pane and a random workload
+reads as noise.
 
 Resolution comes from two numbers:
 
-- **Buckets** — how finely the _kernel_ splits each device. DTrace aggregates
-  every I/O into `offset * buckets / mediasize`, so this is the ceiling on
-  detail. `-buckets` defaults to about as many as the terminal can draw
-  (rounded up to a power of two, clamped to 256–16384). It is fixed for the
-  run: make the window much bigger and the map stays as coarse as it started,
-  until you restart.
+- **Buckets** — how finely each device is split before the display ever sees
+  it: by DTrace's aggregation on FreeBSD, by the accumulator that folds
+  `fs_usage` lines into frames on macOS. Every I/O lands in
+  `offset * buckets / mediasize`, so this is the ceiling on detail.
+  `-buckets` defaults to about as many as the terminal can draw (rounded up
+  to a power of two, clamped to 256–16384). It is fixed for the run: make the
+  window much bigger and the map stays as coarse as it started, until you
+  restart.
 - **Cells** — how many the _pane_ has. With half blocks (`-half`, on by
   default) every terminal row carries two rows of cells: the top half in the
   foreground color, the bottom half in the background one, so a pane is twice
@@ -57,8 +60,8 @@ right now. Under it a dimmer **trail** fades with a half-life of `-trail`
 (60s), showing where the head has been: the tail behind a scrub, the region a
 database keeps rewriting. `-trail off` turns it off, `c` clears both.
 
-The pane header gives the device, its size, what `diskinfo(8)` calls it, and
-the current read, write and TRIM rates in bytes and operations per second.
+The pane header gives the device, its size, what the system calls it, and the
+current read, write and TRIM rates in bytes and operations per second.
 
 ## Hot and cold
 
@@ -97,7 +100,7 @@ Half blocks need a background color, so `-color off` renders full rows.
 
 | Key                    | Action                                              |
 | ---------------------- | --------------------------------------------------- |
-| `space` / `p`          | pause (the map freezes, dtrace keeps running)       |
+| `space` / `p`          | pause (the map freezes, the source keeps running)   |
 | `c`                    | clear the map and the totals                        |
 | `s`                    | switch the color scale between `auto` and `fixed`   |
 | `+` / `-`              | double / halve the thresholds (switches to `fixed`) |
@@ -232,7 +235,8 @@ for pasting into a bug report.
 
 ## The dtrace scripts
 
-The same data, without the TUI:
+The same data, without the TUI. FreeBSD only: both read `struct bio` and
+`struct devstat`, which is not what the io provider hands you on macOS.
 
 ```sh
 sudo dtrace -s iosum.d                  # totals by device and command

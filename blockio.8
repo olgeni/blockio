@@ -60,8 +60,8 @@ prefix.
 Given no names and no
 .Fl a ,
 .Nm
-offers a list of every whole disk, all of them preselected; devices without
-media are left out.
+offers a list of every whole disk, all of them preselected but the disk
+images; devices without media are left out.
 The list is
 .Va kern.disks
 filtered by what answers
@@ -272,6 +272,13 @@ sits dark while
 does the work.
 .Fl l
 lists both.
+.Pp
+macOS synthesizes a device for every APFS container and two for every
+mounted disk image, so one SSD and a handful of Xcode simulator runtimes
+come to fourteen entries.
+The images are listed but start unselected in the picker;
+.Fl a
+still watches every one of them.
 .Pp
 Neither backend sees TRIM: unmap does not travel through the buffer cache,
 so the amber layer stays empty.

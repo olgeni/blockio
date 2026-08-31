@@ -127,11 +127,11 @@ seven in the eight-pane one:
 ## Devices
 
 Given names (`blockio ada0 ada1`, with or without `/dev/`), those are what it
-watches. Given none, it offers a multiselect list of every whole disk,
-everything preselected; `-a` skips the question. That list is `kern.disks`
-filtered by what answers `diskinfo(8)` on FreeBSD, and `diskutil(8)`'s whole
-disks on macOS. Devices without media are left out, so an empty `cd0` never
-shows up. `-l` prints the list and exits.
+watches. Given none, it offers a multiselect list of every whole disk, all
+preselected but the disk images; `-a` skips the question and takes the lot.
+That list is `kern.disks` filtered by what answers `diskinfo(8)` on FreeBSD,
+and `diskutil(8)`'s whole disks on macOS. Devices without media are left out,
+so an empty `cd0` never shows up. `-l` prints the list and exits.
 
 ## macOS
 
@@ -156,6 +156,10 @@ Two things read differently here:
   against the container it lives in (`disk3s5` → `disk3`), never the physical
   disk underneath, so a laptop's `disk0` sits dark while `disk3` does all the
   work. `-l` lists both and says which is which.
+- **There are more devices than disks.** macOS synthesizes one per APFS
+  container and two per mounted disk image, so one SSD and a few Xcode
+  simulator runtimes come to fourteen entries. The images are listed but
+  start unselected in the picker; `-a` still watches everything.
 - **There is no TRIM.** Unmap does not travel through the buffer cache, so
   neither backend can see it and the amber layer stays empty.
 

@@ -1,15 +1,16 @@
 # blockio — watch the disks the way DOS defrag did
 
 `blockio` is a Go + [bubbletea](https://github.com/charmbracelet/bubbletea) /
-[lipgloss](https://github.com/charmbracelet/lipgloss) front-end to FreeBSD's
-DTrace `io` provider: one pane per device, one cell per slice of the address
-space, **green for reads, red for writes, amber for TRIM**. A resilver, a
-scrub or a big sequential read draws a bright head marching across the map;
-scattered metadata writes speckle it; an idle disk sits dark.
+[lipgloss](https://github.com/charmbracelet/lipgloss) front-end to whatever
+the kernel will say about block I/O — FreeBSD's DTrace `io` provider, macOS's
+`fs_usage(1)`: one pane per device, one cell per slice of the address space,
+**green for reads, red for writes, amber for TRIM**. A resilver, a scrub or a
+big sequential read draws a bright head marching across the map; scattered
+metadata writes speckle it; an idle disk sits dark.
 
 ```
 sudo blockio                 # pick devices from a list, all preselected
-sudo blockio ada0 ada1       # watch these
+sudo blockio ada0 ada1       # watch these (disk0 disk3 on macOS)
 sudo blockio -a              # every disk, without asking
 sudo blockio -l              # list the disks and exit
 blockio -demo 8              # synthetic devices, no root needed
@@ -17,8 +18,10 @@ go test ./...                # unit tests
 man ./blockio.8              # manual page
 ```
 
-It needs root (for `dtrace(1)` and `diskinfo(8)`) and the DTrace modules:
-`kldload dtraceall`, or `dtraceall_load="YES"` in `/boot/loader.conf`.
+It needs root everywhere. On FreeBSD it reads `dtrace(1)` and `diskinfo(8)`,
+so it also wants the DTrace modules: `kldload dtraceall`, or
+`dtraceall_load="YES"` in `/boot/loader.conf`. On macOS it reads `fs_usage(1)`
+and `diskutil(8)`, and needs nothing turned off — see [macOS](#macos).
 
 ![two mirror halves under load](doc/main.png)
 
@@ -124,10 +127,58 @@ seven in the eight-pane one:
 ## Devices
 
 Given names (`blockio ada0 ada1`, with or without `/dev/`), those are what it
-watches. Given none, it offers a multiselect list of every disk in
-`kern.disks` that answers `diskinfo(8)`, everything preselected; `-a` skips
-the question. Devices without media are left out, so an empty `cd0` never
+watches. Given none, it offers a multiselect list of every whole disk,
+everything preselected; `-a` skips the question. That list is `kern.disks`
+filtered by what answers `diskinfo(8)` on FreeBSD, and `diskutil(8)`'s whole
+disks on macOS. Devices without media are left out, so an empty `cd0` never
 shows up. `-l` prints the list and exits.
+
+## macOS
+
+macOS has DTrace too, but not out of the box: System Integrity Protection
+hides every kernel probe, so `io:::start` matches nothing at all until SIP is
+relaxed from recoveryOS. The default backend is therefore `fs_usage(1)`,
+which reports the same kdebug events the buffer cache raises for every
+completed I/O:
+
+```
+13:02:55.798868  WrData[A]  D=0x0e2db501  B=0x100000 /dev/disk3s5  big.bin
+```
+
+`D` is a block number in the whole disk's address space and `B` is the byte
+count, which is everything the map needs. It costs a line down a pipe per
+I/O, where the D script costs an aggregation the kernel keeps, but it works
+on a machine nobody has had to reboot.
+
+Two things read differently here:
+
+- **The busy disk is a synthesized one.** An APFS volume's I/O is reported
+  against the container it lives in (`disk3s5` → `disk3`), never the physical
+  disk underneath, so a laptop's `disk0` sits dark while `disk3` does all the
+  work. `-l` lists both and says which is which.
+- **There is no TRIM.** Unmap does not travel through the buffer cache, so
+  neither backend can see it and the amber layer stays empty.
+
+`-source dtrace` is there for a machine that has had SIP relaxed —
+`csrutil enable --without dtrace` from recoveryOS, which on Apple silicon
+wants the security policy lowered to Reduced Security first. It is the finer
+of the two, since the kernel does the aggregating, and the less travelled:
+SIP is on by default, so `fs_usage` is the path that gets the mileage.
+
+macOS carries the Solaris io provider rather than FreeBSD's, so it is a
+different D program: `args[0]` is a translated `bufinfo_t`, the direction is
+`b_flags & B_READ`, the size is `b_bcount`, and the position is `b_blkno` in
+device blocks. Devices have to be keyed by minor number, because the
+`devinfo_t` translator in `/usr/lib/dtrace/io.d` still ships as
+
+```d
+dev_name = "??"; /* XXX */
+dev_statname = "??"; /* XXX */
+```
+
+Every minor a disk answers to (`disk3`, `disk3s1`, `disk3s1s1`, ...) maps to
+the same pane, since they all report blocks in the whole disk's address
+space.
 
 ## Configuration
 
@@ -144,6 +195,7 @@ trail = 2m              # half-life of the trail, or off
 half = on               # two rows of cells per terminal row
 buckets = 8192          # slices per device
 interval = 100ms        # sampling interval
+source = fsusage        # auto, dtrace, fsusage (macOS)
 ```
 
 Flags override the file. Unknown keys and bad values are warned about, never
@@ -163,6 +215,7 @@ fatal.
 | `-trail`      | half-life of the trail, `0` for none            |
 | `-buckets`    | slices per device (0 fits the terminal)         |
 | `-half`       | half blocks: two rows of cells per terminal row |
+| `-source`     | `auto`, `dtrace`, `fsusage` (macOS)             |
 | `-demo`       | synthesize N devices instead of tracing         |
 | `-once`       | sample for a while, print one frame, exit       |
 | `-for`        | how long `-once` samples (default 2s)           |
@@ -193,12 +246,18 @@ file directly and they fall back to 512-byte sectors and `-`.
 
 ## How it works
 
-At startup `diskinfo(8)` is asked about each device and the answers are baked
+On FreeBSD, at startup `diskinfo(8)` is asked about each device and the answers are baked
 into a generated D script as an `int64_t media[]` table, together with a
 `track[]` table of the devices to watch. Every `io:::start` is aggregated
 into `@cells[device, command, bucket]`, and a `tick` clause prints the
 aggregation and truncates it, which the Go side folds into the display. Only
 touched buckets are printed, so an idle disk costs nothing.
+
+`fs_usage` has no aggregation to offer and no notion of a frame, so on macOS
+the Go side keeps both: every line is folded into a
+`map[device, command, bucket]` under a mutex, and a ticker drains it into a
+frame at the sampling interval. Both backends hand the display the same
+`Frame`, which is all it knows about either.
 
 ## Notes on the FreeBSD io provider
 
@@ -227,7 +286,7 @@ one. `int64_t` or the number wraps, silently.
 ## Tests
 
 `go test ./...` covers the parsing of dtrace's output and of the generated
-script, the threshold and color-mode parsers, the ramp (that reads come out
+script, the reading of an `fs_usage` line and the frame it accumulates into, the threshold and color-mode parsers, the ramp (that reads come out
 green and writes red, that a 256-color index is not emitted as an ANSI code,
 that fixed thresholds ignore the peak), the half-block rows and the pane
 layout. None of it needs root or a terminal.

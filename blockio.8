@@ -1,4 +1,4 @@
-.Dd August 30, 2026
+.Dd August 31, 2026
 .Dt BLOCKIO 8
 .Os
 .Sh NAME
@@ -15,6 +15,7 @@
 .Op Fl trail Ar duration
 .Op Fl buckets Ar n
 .Op Fl half
+.Op Fl source Ar backend
 .Op Ar device ...
 .Nm
 .Fl l
@@ -33,18 +34,25 @@ Cell zero is LBA zero in the top left, and cells run left to right and top
 to bottom, so a whole device fits a pane whatever its size.
 A resilver or a scrub appears as a bright band sweeping across the map.
 .Pp
-The data comes from DTrace's
+.Nm
+must run as root whatever it reads.
+On
+.Fx
+the data comes from DTrace's
 .Xr dtrace 1
 .Va io
-provider, so
-.Nm
-must run as root, and the DTrace modules must be loaded:
+provider, so the DTrace modules must be loaded:
 .Pp
 .Dl kldload dtraceall
 .Pp
-Device geometry comes from
-.Xr diskinfo 8 ,
-which also needs root.
+and device geometry comes from
+.Xr diskinfo 8 .
+On macOS the data comes from
+.Xr fs_usage 1
+and the geometry from
+.Xr diskutil 8 ,
+neither of which needs anything turned off; see
+.Sx MACOS .
 .Pp
 Named devices are watched, with or without a
 .Pa /dev/
@@ -52,11 +60,17 @@ prefix.
 Given no names and no
 .Fl a ,
 .Nm
-offers a list of every disk in
+offers a list of every whole disk, all of them preselected; devices without
+media are left out.
+The list is
 .Va kern.disks
-that answers
-.Xr diskinfo 8 ,
-all of them preselected; devices without media are left out.
+filtered by what answers
+.Xr diskinfo 8
+on
+.Fx ,
+and the whole disks
+.Xr diskutil 8
+reports on macOS.
 .Pp
 The options are:
 .Bl -tag -width "-thresholds list"
@@ -127,6 +141,18 @@ Draw two rows of cells per terminal row, the top half of each cell in the
 foreground color and the bottom half in the background one.
 On by default; it needs a background color, so it is ignored with
 .Fl color Cm off .
+.It Fl source Ar backend
+Where the I/O comes from:
+.Cm auto ,
+.Cm dtrace ,
+or
+.Cm fsusage .
+.Cm auto
+is the only backend on
+.Fx
+and
+.Cm fsusage
+on macOS.
 .It Fl demo Ar n
 Fabricate
 .Ar n
@@ -228,10 +254,63 @@ Capture one frame for a report:
 Look at the eight pane layout on a machine with two disks:
 .Pp
 .Dl "blockio -demo 8 -color truecolor"
+.Sh MACOS
+System Integrity Protection hides every kernel probe, so
+.Va io:::start
+matches nothing until SIP is relaxed from recoveryOS.
+The default backend is therefore
+.Xr fs_usage 1 ,
+which reports the kdebug events the buffer cache raises for every completed
+I/O: a block number in the whole disk's address space and a byte count,
+which is all the map needs.
+.Pp
+An APFS volume's I/O is reported against the synthesized container it lives
+in, never the physical disk underneath, so
+.Pa disk0
+sits dark while
+.Pa disk3
+does the work.
+.Fl l
+lists both.
+.Pp
+Neither backend sees TRIM: unmap does not travel through the buffer cache,
+so the amber layer stays empty.
+.Pp
+.Fl source Cm dtrace
+is for a machine that has had SIP relaxed with
+.Pp
+.Dl csrutil enable --without dtrace
+.Pp
+from recoveryOS, which on Apple silicon wants the security policy lowered to
+Reduced Security first.
+macOS carries the Solaris
+.Va io
+provider, so it is a different D program:
+.Va args Ns [0]
+is a translated
+.Vt bufinfo_t ,
+the direction is
+.Va b_flags No & Dv B_READ ,
+the size is
+.Va b_bcount
+and the position is
+.Va b_blkno .
+Devices are keyed by minor number, because the
+.Vt devinfo_t
+translator in
+.Pa /usr/lib/dtrace/io.d
+leaves
+.Va dev_name
+and
+.Va dev_statname
+as the literal
+.Qq ?? .
 .Sh SEE ALSO
 .Xr dtrace 1 ,
+.Xr fs_usage 1 ,
 .Xr systat 1 ,
 .Xr diskinfo 8 ,
+.Xr diskutil 8 ,
 .Xr gstat 8 ,
 .Xr iostat 8 ,
 .Xr zpool 8
@@ -243,7 +322,9 @@ and
 .Pa iosum.d ,
 show the same data as text.
 .Sh CAVEATS
-Each logical I/O reaches the
+On
+.Fx ,
+each logical I/O reaches the
 .Va io
 provider twice, once at the GEOM layer and once at the disk layer.
 .Nm
@@ -252,6 +333,9 @@ provider that never reaches a disk, such as a fully cached read, is not
 shown at all: this is a map of what the disks do, not of what the file
 system was asked for.
 .Pp
-The bucket count is baked into the generated D script at startup.
+The bucket count is fixed at startup, baked into the generated D script or
+into the accumulator that folds
+.Xr fs_usage 1
+lines into frames.
 Resizing the terminal rearranges the panes but does not make the map finer;
 restart for that.

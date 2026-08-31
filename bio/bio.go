@@ -46,6 +46,7 @@ type Disk struct {
 	Stripe     int64
 	Descr      string // "Samsung SSD 870 EVO 1TB"
 	Rotation   int    // 0 for solid state, -1 when unknown
+	Image      bool   // backed by a disk image rather than by hardware
 }
 
 // Size renders the media size the way diskinfo(8) does.

@@ -39,43 +39,56 @@ func Disks() ([]Disk, error) {
 
 // Info asks diskutil(8) about one device.
 func Info(name string) (Disk, error) {
-	d := Disk{Name: name, Rotation: -1}
-
-	var info struct {
-		Size                int64
-		DeviceBlockSize     int64
-		MediaName           string
-		SolidState          bool
-		IORegistryEntryName string
-	}
+	var info diskInfo
 	if err := diskutil(&info, "info", "-plist", name); err != nil {
-		return d, err
+		return Disk{Name: name, Rotation: -1}, err
 	}
-
-	d.SectorSize = info.DeviceBlockSize
-	d.MediaSize = info.Size
-	d.Stripe = info.DeviceBlockSize
-	if d.SectorSize > 0 {
-		d.Sectors = d.MediaSize / d.SectorSize
-	}
-	if info.SolidState {
-		d.Rotation = 0
-	}
-
-	// MediaName is inherited from the physical disk, so every container on
-	// an internal SSD calls itself the SSD.  Say what the device really is.
-	d.Descr = info.MediaName
-	switch {
-	case info.IORegistryEntryName == "AppleAPFSMedia":
-		d.Descr = strings.TrimSpace(info.MediaName + " APFS container")
-	case strings.Contains(info.IORegistryEntryName, "Disk Image"):
-		d.Descr = "disk image"
-	}
-
+	d := info.disk(name)
 	if d.MediaSize <= 0 {
 		return d, fmt.Errorf("%s: no media", name)
 	}
 	return d, nil
+}
+
+// diskInfo is the part of "diskutil info -plist" that the map needs.
+type diskInfo struct {
+	Size                int64
+	DeviceBlockSize     int64
+	MediaName           string
+	SolidState          bool
+	IORegistryEntryName string
+}
+
+// disk turns one diskutil answer into a Disk.
+func (i diskInfo) disk(name string) Disk {
+	d := Disk{
+		Name:       name,
+		SectorSize: i.DeviceBlockSize,
+		MediaSize:  i.Size,
+		Stripe:     i.DeviceBlockSize,
+		Descr:      i.MediaName,
+		Rotation:   -1,
+		// MediaName is inherited from whatever the device is carved out
+		// of, so every container on a mounted image calls itself an image
+		// too, which is exactly the set to leave unselected.
+		Image: i.MediaName == "Disk Image",
+	}
+	if d.SectorSize > 0 {
+		d.Sectors = d.MediaSize / d.SectorSize
+	}
+	if i.SolidState {
+		d.Rotation = 0
+	}
+
+	// The name is inherited the same way, so every container on an internal
+	// SSD calls itself the SSD.  Say what the device really is.
+	switch {
+	case i.IORegistryEntryName == "AppleAPFSMedia":
+		d.Descr = strings.TrimSpace(i.MediaName + " APFS container")
+	case strings.Contains(i.IORegistryEntryName, "Disk Image"):
+		d.Descr = "disk image"
+	}
+	return d
 }
 
 // diskutil runs diskutil and unmarshals its plist into v.  There is no

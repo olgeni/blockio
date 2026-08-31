@@ -204,10 +204,13 @@ func choose(disks []bio.Disk, args []string, all bool) ([]bio.Disk, error) {
 		return disks, nil
 	}
 
+	// Everything is offered, but a disk image starts unselected: macOS
+	// synthesizes a device for every mounted one, and a machine with a few
+	// simulator runtimes about has more of those than it has disks.
 	options := make([]huh.Option[string], 0, len(disks))
 	for _, d := range disks {
 		label := fmt.Sprintf("%-8s %8s  %s", d.Name, d.Size(), d.Descr)
-		options = append(options, huh.NewOption(label, d.Name).Selected(true))
+		options = append(options, huh.NewOption(label, d.Name).Selected(!d.Image))
 	}
 
 	var picked []string

@@ -141,6 +141,12 @@ Draw two rows of cells per terminal row, the top half of each cell in the
 foreground color and the bottom half in the background one.
 On by default; it needs a background color, so it is ignored with
 .Fl color Cm off .
+.It Fl columns Ar n
+How many panes go side by side.
+Zero, the default, puts one or two devices in a single column and anything
+above that in two.
+A count that would leave the panes too narrow to read is reduced, and one
+that would leave them too short to draw anything is raised.
 .It Fl source Ar backend
 Where the I/O comes from:
 .Cm auto ,
@@ -185,9 +191,13 @@ The pane header names the device, its size and its description, and the
 line below gives read, write and TRIM rates in bytes and operations per
 second, with the total moved since the map was last cleared.
 .Pp
-Panes go in one column for one or two devices and two columns above that, so
-three devices sit in the four pane layout, five in the six pane layout and
-seven in the eight pane layout.
+By default panes go in one column for one or two devices and two columns
+above that, so three devices sit in the four pane layout, five in the six
+pane layout and seven in the eight pane layout.
+.Fl columns
+and the
+.Ic l
+key say how many go side by side instead.
 .Ss Keys
 .Bl -tag -width "1 to 9" -compact
 .It Ic space , p
@@ -205,6 +215,9 @@ and
 .It Ic + , -
 Double or halve the thresholds, switching to
 .Cm fixed .
+.It Ic l
+Cycle the column count: automatic, then one column up to four, never more
+columns than there are devices.
 .It Ic 1 No to Ic 9
 Show one device full screen; the same key returns.
 .It Ic 0 , a
@@ -230,7 +243,7 @@ per line, with
 .Ql #
 comments.
 The options are
-.Cm color , scale , thresholds , decay , trail , buckets , half
+.Cm color , scale , thresholds , decay , trail , buckets , columns , half
 and
 .Cm interval ,
 each taking the same values as the flag of that name.

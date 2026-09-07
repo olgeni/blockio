@@ -104,15 +104,16 @@ Half blocks need a background color, so `-color off` renders full rows.
 | `c`                    | clear the map and the totals                        |
 | `s`                    | switch the color scale between `auto` and `fixed`   |
 | `+` / `-`              | double / halve the thresholds (switches to `fixed`) |
+| `l`                    | cycle the column count: auto, 1, 2, 3, 4            |
 | `1`–`9`                | show one device full screen; the same key returns   |
 | `0` / `a`              | show all of them again                              |
 | `q` / `esc` / `ctrl+c` | quit                                                |
 
 ## Layouts
 
-Panes go in one column for one or two devices and two columns above that, so
-three devices sit in the four-pane layout, five in the six-pane one, and
-seven in the eight-pane one:
+By default panes go in one column for one or two devices and two columns
+above that, so three devices sit in the four-pane layout, five in the
+six-pane one, and seven in the eight-pane one:
 
 ```
 1 device     2 devices    3-4 devices  5-6 devices  7-8 devices
@@ -201,6 +202,7 @@ decay = 500ms           # half-life of activity
 trail = 2m              # half-life of the trail, or off
 half = on               # two rows of cells per terminal row
 buckets = 8192          # slices per device
+columns = 2             # panes side by side, 0 to fit the device count
 interval = 100ms        # sampling interval
 source = fsusage        # auto, dtrace, fsusage (macOS)
 ```
@@ -222,6 +224,7 @@ fatal.
 | `-trail`      | half-life of the trail, `0` for none            |
 | `-buckets`    | slices per device (0 fits the terminal)         |
 | `-half`       | half blocks: two rows of cells per terminal row |
+| `-columns`    | panes side by side (0 fits the device count)    |
 | `-source`     | `auto`, `dtrace`, `fsusage` (macOS)             |
 | `-demo`       | synthesize N devices instead of tracing         |
 | `-once`       | sample for a while, print one frame, exit       |

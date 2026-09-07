@@ -113,6 +113,12 @@ func setOption(cfg *ui.Config, interval *time.Duration, kind *bio.SourceKind, ke
 			return fmt.Errorf("bad buckets %q", value)
 		}
 		cfg.Buckets = bio.ClampBuckets(n)
+	case "columns":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 {
+			return fmt.Errorf("bad columns %q", value)
+		}
+		cfg.Columns = n
 	case "half":
 		on, err := parseBool(value)
 		if err != nil {

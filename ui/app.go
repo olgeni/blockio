@@ -25,6 +25,14 @@ const (
 
 const trailFloor = 0.04
 
+// minPaneWidth and minPaneHeight are the smallest a pane may become and
+// still draw: the border eats two cells each way, and what is left has to
+// hold the device line, the rate line and a row of map.
+const (
+	minPaneWidth  = 20
+	minPaneHeight = 5
+)
+
 // Scale decides how a cell's byte rate becomes a step on the color ramp.
 type Scale int
 
@@ -54,6 +62,7 @@ type Config struct {
 	Color      ColorMode
 	Buckets    int  // how finely each device is split
 	HalfBlocks bool // two data rows per terminal row
+	Columns    int  // panes side by side, 0 to fit the device count
 }
 
 // DefaultConfig is a ramp that suits a mixed workload on a single disk.
@@ -242,6 +251,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clear()
 		case "0", "a":
 			m.focus = -1
+		case "l":
+			m.cfg.Columns = nextColumns(m.cfg.Columns, len(m.devs))
 		case "s":
 			if m.cfg.Scale == ScaleAuto {
 				m.cfg.Scale = ScaleFixed
@@ -428,16 +439,53 @@ func (m Model) View() string {
 	return strings.Join([]string{head, m.grid(devs, m.width, body), foot}, "\n")
 }
 
-// grid lays the panes out in one column for one or two devices, two columns
-// otherwise: three devices sit in a 2x2 the way four would.
+// columns is how many panes go side by side: whatever Columns asks for, else
+// one column for one or two devices and two above that.  Too few columns and
+// the panes are too short to draw, too many and they are too narrow, so the
+// height raises the count and the width caps it.
+func (m Model) columns(n, width, height int) int {
+	cols := m.cfg.Columns
+	if cols <= 0 {
+		cols = 2
+		if n <= 2 {
+			cols = 1
+		}
+	}
+	if rows := height / minPaneHeight; rows >= 1 && cols*rows < n {
+		cols = (n + rows - 1) / rows
+	}
+	if cols > n {
+		cols = n
+	}
+	if fits := width / minPaneWidth; cols > fits {
+		cols = fits
+	}
+	if cols < 1 {
+		cols = 1
+	}
+	return cols
+}
+
+// nextColumns steps the layout the `l` key cycles through: automatic, then
+// one column up to four, never more columns than there are devices.
+func nextColumns(cols, devs int) int {
+	limit := devs
+	if limit > 4 {
+		limit = 4
+	}
+	if cols >= limit {
+		return 0
+	}
+	return cols + 1
+}
+
+// grid lays the panes out in the columns the layout asks for: three devices
+// sit in a 2x2 the way four would.
 func (m Model) grid(devs []*device, width, height int) string {
 	if len(devs) == 0 {
 		return ""
 	}
-	cols := 2
-	if len(devs) <= 2 {
-		cols = 1
-	}
+	cols := m.columns(len(devs), width, height)
 	rows := (len(devs) + cols - 1) / cols
 
 	paneW := width / cols
@@ -656,6 +704,9 @@ func (m Model) header() string {
 	}
 	line := title + styleMuted.Render(what)
 	line += styleMuted.Render("  scale " + m.scaleLabel())
+	if m.cfg.Columns > 0 {
+		line += styleMuted.Render("  columns " + strconv.Itoa(m.cfg.Columns))
+	}
 	if m.paused {
 		line += "  " + stylePause.Render("PAUSED")
 	}
@@ -681,7 +732,7 @@ func (m Model) footer() string {
 	legend := styleRead.Render("█ read") + "  " +
 		styleWrite.Render("█ write") + "  " +
 		styleTrim.Render("█ trim")
-	keys := styleMuted.Render("space pause · c clear · s scale · +/- thresholds · 1-9 one · 0 all · q quit")
+	keys := styleMuted.Render("space pause · c clear · s scale · l layout · +/- thresholds · 1-9 one · 0 all · q quit")
 	gap := m.width - lipgloss.Width(legend) - lipgloss.Width(keys)
 	if gap < 2 {
 		return legend

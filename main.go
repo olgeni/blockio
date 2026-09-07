@@ -45,6 +45,7 @@ func main() {
 		decay      = flag.Duration("decay", def.HeatLife, "half-life of activity on the map")
 		trail      = flag.Duration("trail", def.TrailLife, "half-life of the trail (0 for none)")
 		buckets    = flag.Int("buckets", 0, "slices per device (0 fits the terminal)")
+		columns    = flag.Int("columns", 0, "panes side by side (0 fits the device count)")
 		half       = flag.Bool("half", true, "half blocks: two rows of cells per terminal row")
 	)
 	flag.Usage = func() {
@@ -78,6 +79,9 @@ func main() {
 	}
 	if set["buckets"] {
 		cfg.Buckets = bio.ClampBuckets(*buckets)
+	}
+	if set["columns"] {
+		cfg.Columns = *columns
 	}
 	if set["half"] {
 		cfg.HalfBlocks = *half

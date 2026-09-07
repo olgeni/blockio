@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/olgeni/blockio/bio"
 )
 
@@ -58,6 +60,73 @@ func TestPanesAreLaidOutInTwoColumns(t *testing.T) {
 	line := strings.Split(m.View(), "\n")[1]
 	if n := strings.Count(line, "╭"); n != 2 {
 		t.Errorf("top row has %d panes, want 2", n)
+	}
+}
+
+func TestColumnsOverrideTheLayout(t *testing.T) {
+	disks := []bio.Disk{
+		{Name: "ada0", MediaSize: 1 << 40, Rotation: -1},
+		{Name: "ada1", MediaSize: 1 << 40, Rotation: -1},
+	}
+	m := testModel(disks...)
+	m.SetSize(120, 30)
+
+	// Two devices stack by default.
+	if n := strings.Count(strings.Split(m.View(), "\n")[1], "\u256d"); n != 1 {
+		t.Errorf("top row has %d panes by default, want 1", n)
+	}
+
+	// The l key cycles automatic, one column, two columns, automatic.
+	for _, want := range []int{1, 2, 0} {
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+		m = next.(Model)
+		if m.cfg.Columns != want {
+			t.Fatalf("l gave %d columns, want %d", m.cfg.Columns, want)
+		}
+	}
+
+	m.cfg.Columns = 2
+	if n := strings.Count(strings.Split(m.View(), "\n")[1], "\u256d"); n != 2 {
+		t.Errorf("top row has %d panes at columns 2, want 2", n)
+	}
+}
+
+// A narrow terminal cannot hold the columns that were asked for, so the
+// layout drops them rather than rendering panes too small to read.
+func TestColumnsAreClampedToTheWidth(t *testing.T) {
+	var disks []bio.Disk
+	for i := 0; i < 4; i++ {
+		disks = append(disks, bio.Disk{Name: fmt.Sprintf("ada%d", i), MediaSize: 1 << 40, Rotation: -1})
+	}
+	m := testModel(disks...)
+	m.cfg.Columns = 4
+
+	m.SetSize(120, 30)
+	if got := m.columns(4, 120, 28); got != 4 {
+		t.Errorf("120 columns wide gave %d panes per row, want 4", got)
+	}
+	m.SetSize(50, 30)
+	if got := m.columns(4, 50, 28); got != 2 {
+		t.Errorf("50 columns wide gave %d panes per row, want 2", got)
+	}
+}
+
+// A short terminal cannot stack four panes, so the layout adds a column
+// rather than handing every pane too few rows to draw anything.
+func TestShortTerminalsGainColumns(t *testing.T) {
+	var disks []bio.Disk
+	for i := 0; i < 4; i++ {
+		disks = append(disks, bio.Disk{Name: fmt.Sprintf("ada%d", i), MediaSize: 1 << 40, Rotation: -1})
+	}
+	m := testModel(disks...)
+	m.cfg.Columns = 1
+	m.SetSize(80, 18)
+
+	if got := m.columns(4, 80, 16); got != 2 {
+		t.Fatalf("16 rows gave %d panes per row, want 2", got)
+	}
+	if !strings.Contains(m.View(), "ada3") {
+		t.Error("the last device is not drawn")
 	}
 }
 

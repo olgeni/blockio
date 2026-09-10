@@ -1,4 +1,4 @@
-.Dd August 31, 2026
+.Dd September 10, 2026
 .Dt BLOCKIO 8
 .Os
 .Sh NAME
@@ -35,7 +35,7 @@ to bottom, so a whole device fits a pane whatever its size.
 A resilver or a scrub appears as a bright band sweeping across the map.
 .Pp
 .Nm
-must run as root whatever it reads.
+must run as root whatever it reads, or elevated on Windows.
 On
 .Fx
 the data comes from DTrace's
@@ -53,10 +53,19 @@ and the geometry from
 .Xr diskutil 8 ,
 neither of which needs anything turned off; see
 .Sx MACOS .
+On Windows the data comes from Event Tracing for Windows and the geometry
+from the disks themselves; see
+.Sx WINDOWS .
 .Pp
 Named devices are watched, with or without a
 .Pa /dev/
 prefix.
+On Windows,
+.Pa \e\e.\ePhysicalDrive1
+and
+.Pa PhysicalDrive1
+both name
+.Pa disk1 .
 Given no names and no
 .Fl a ,
 .Nm
@@ -68,9 +77,12 @@ filtered by what answers
 .Xr diskinfo 8
 on
 .Fx ,
-and the whole disks
+the whole disks
 .Xr diskutil 8
-reports on macOS.
+reports on macOS, and every
+.Pa \e\e.\ePhysicalDrive Ns Ar N
+with media on Windows, as
+.Pa disk Ns Ar N .
 .Pp
 The options are:
 .Bl -tag -width "-thresholds list"
@@ -151,14 +163,16 @@ that would leave them too short to draw anything is raised.
 Where the I/O comes from:
 .Cm auto ,
 .Cm dtrace ,
+.Cm fsusage
 or
-.Cm fsusage .
+.Cm etw .
 .Cm auto
 is the only backend on
-.Fx
-and
+.Fx ,
 .Cm fsusage
-on macOS.
+on macOS and
+.Cm etw
+on Windows.
 .It Fl demo Ar n
 Fabricate
 .Ar n
@@ -202,9 +216,7 @@ key say how many go side by side instead.
 .Bl -tag -width "1 to 9" -compact
 .It Ic space , p
 Pause.
-The map freezes;
-.Xr dtrace 1
-keeps running.
+The map freezes; the source keeps running.
 .It Ic c
 Clear the map and the totals.
 .It Ic s
@@ -248,6 +260,8 @@ and
 .Cm interval ,
 each taking the same values as the flag of that name.
 Flags override the file, and a bad line is a warning rather than an error.
+.It Pa %AppData%\eblockio\econfig
+The same, on Windows.
 .El
 .Sh EXAMPLES
 Watch both halves of a mirror while it resilvers, with colors that mean the
@@ -325,6 +339,49 @@ and
 .Va dev_statname
 as the literal
 .Qq ?? .
+.Sh WINDOWS
+The data comes from Event Tracing for Windows: the
+Microsoft-Windows-Kernel-Disk provider raises an event for every completed
+disk I/O with the disk number, the byte count and the byte offset from the
+start of the disk.
+.Nm
+starts a real-time session named
+.Ql blockio ,
+enables the provider in it and reads the events in-process.
+.Pp
+Only an elevated process may enable a kernel provider, so
+.Nm
+must run from an Administrator terminal, or under the
+.Ic sudo
+of Windows 11 in inline mode:
+.Pp
+.Dl sudo config --enable normal
+.Pp
+.Fl l
+and
+.Fl demo
+need no elevation.
+.Pp
+Disks are named
+.Pa disk0 , disk1
+and so on, numbered as Disk Management and
+.Ic diskpart
+number them.
+Geometry comes from
+.Dv IOCTL_DISK_GET_DRIVE_GEOMETRY_EX
+and the description from
+.Dv IOCTL_STORAGE_QUERY_PROPERTY .
+A mounted VHD is listed but starts unselected in the picker.
+.Pp
+The provider knows reads, writes and flushes and nothing else, so the amber
+layer stays empty.
+.Pp
+There is one session: a second
+.Nm
+takes it over from the first, and one that is killed leaves it running until
+the next start reclaims it, or until
+.Pp
+.Dl logman stop blockio -ets
 .Sh SEE ALSO
 .Xr dtrace 1 ,
 .Xr fs_usage 1 ,
@@ -356,6 +413,6 @@ system was asked for.
 The bucket count is fixed at startup, baked into the generated D script or
 into the accumulator that folds
 .Xr fs_usage 1
-lines into frames.
+lines or ETW events into frames.
 Resizing the terminal rearranges the panes but does not make the map finer;
 restart for that.

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -16,12 +17,15 @@ import (
 )
 
 // configPath is $BLOCKIO_CONFIG, else $XDG_CONFIG_HOME/blockio/config, else
-// ~/.config/blockio/config.
+// ~/.config/blockio/config, or %AppData%\blockio\config on Windows.
 func configPath() string {
 	if p := os.Getenv("BLOCKIO_CONFIG"); p != "" {
 		return p
 	}
 	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" && runtime.GOOS == "windows" {
+		dir, _ = os.UserConfigDir()
+	}
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {

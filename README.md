@@ -3,14 +3,15 @@
 `blockio` is a Go + [bubbletea](https://github.com/charmbracelet/bubbletea) /
 [lipgloss](https://github.com/charmbracelet/lipgloss) front-end to whatever
 the kernel will say about block I/O — FreeBSD's DTrace `io` provider, macOS's
-`fs_usage(1)`: one pane per device, one cell per slice of the address space,
-**green for reads, red for writes, amber for TRIM**. A resilver, a scrub or a
+`fs_usage(1)`, Windows's Event Tracing: one pane per device, one cell per
+slice of the address space, **green for reads, red for writes, amber for
+TRIM**. A resilver, a scrub or a
 big sequential read draws a bright head marching across the map; scattered
 metadata writes speckle it; an idle disk sits dark.
 
 ```
 sudo blockio                 # pick devices from a list, all preselected
-sudo blockio ada0 ada1       # watch these (disk0 disk3 on macOS)
+sudo blockio ada0 ada1       # watch these (disk0 disk3 on macOS or Windows)
 sudo blockio -a              # every disk, without asking
 sudo blockio -l              # list the disks and exit
 blockio -demo 8              # synthetic devices, no root needed
@@ -18,10 +19,12 @@ go test ./...                # unit tests
 man ./blockio.8              # manual page
 ```
 
-It needs root everywhere. On FreeBSD it reads `dtrace(1)` and `diskinfo(8)`,
-so it also wants the DTrace modules: `kldload dtraceall`, or
-`dtraceall_load="YES"` in `/boot/loader.conf`. On macOS it reads `fs_usage(1)`
-and `diskutil(8)`, and needs nothing turned off — see [macOS](#macos).
+It needs root everywhere, or an elevated prompt on Windows. On FreeBSD it
+reads `dtrace(1)` and `diskinfo(8)`, so it also wants the DTrace modules:
+`kldload dtraceall`, or `dtraceall_load="YES"` in `/boot/loader.conf`. On macOS
+it reads `fs_usage(1)` and `diskutil(8)`, and needs nothing turned off — see
+[macOS](#macos). On Windows it reads Event Tracing for Windows and asks the
+disks themselves for their geometry — see [Windows](#windows).
 
 ![two mirror halves under load](doc/main.png)
 
@@ -35,7 +38,8 @@ a frame, `freeze` turns it into a PNG.
 Each pane is one device. Cell 0 is LBA 0 in the top left, and cells run left
 to right and top to bottom, so the whole device always fits the pane however
 large it is. Position is by byte offset against the media size the system
-reports — `diskinfo(8)` on FreeBSD, `diskutil(8)` on macOS — which is why a
+reports — `diskinfo(8)` on FreeBSD, `diskutil(8)` on macOS,
+`IOCTL_DISK_GET_DRIVE_GEOMETRY_EX` on Windows — which is why a
 `zpool scrub` reads as a band sweeping down the pane and a random workload
 reads as noise.
 
@@ -43,8 +47,8 @@ Resolution comes from two numbers:
 
 - **Buckets** — how finely each device is split before the display ever sees
   it: by DTrace's aggregation on FreeBSD, by the accumulator that folds
-  `fs_usage` lines into frames on macOS. Every I/O lands in
-  `offset * buckets / mediasize`, so this is the ceiling on detail.
+  `fs_usage` lines (macOS) or ETW events (Windows) into frames. Every I/O
+  lands in `offset * buckets / mediasize`, so this is the ceiling on detail.
   `-buckets` defaults to about as many as the terminal can draw (rounded up
   to a power of two, clamped to 256–16384). It is fixed for the run: make the
   window much bigger and the map stays as coarse as it started, until you
@@ -134,7 +138,8 @@ Given names (`blockio ada0 ada1`, with or without `/dev/`), those are what it
 watches. Given none, it offers a multiselect list of every whole disk, all
 preselected but the disk images; `-a` skips the question and takes the lot.
 That list is `kern.disks` filtered by what answers `diskinfo(8)` on FreeBSD,
-and `diskutil(8)`'s whole disks on macOS. Devices without media are left out,
+`diskutil(8)`'s whole disks on macOS, and every `\\.\PhysicalDriveN` on
+Windows, as `diskN`. Devices without media are left out,
 so an empty `cd0` never shows up. `-l` prints the list and exits.
 
 ## macOS
@@ -188,10 +193,41 @@ Every minor a disk answers to (`disk3`, `disk3s1`, `disk3s1s1`, ...) maps to
 the same pane, since they all report blocks in the whole disk's address
 space.
 
+## Windows
+
+Windows has a DTrace port, but it wants a boot option and an installer. Event
+Tracing for Windows is on every machine, and its
+`Microsoft-Windows-Kernel-Disk` provider raises an event for every completed
+disk I/O carrying the three numbers the map needs: the disk, the byte count,
+and the byte offset from the start of the disk. `blockio` starts a real-time
+ETW session called `blockio`, enables the provider in it and reads the events
+in-process — no subprocess, no cgo, nothing to install.
+
+- **It needs an elevated prompt.** Only an elevated process may enable a
+  kernel provider: run it from an Administrator terminal, or with the `sudo`
+  that comes with Windows 11 24H2 in inline mode
+  (`sudo config --enable normal`). `-l` and `-demo` need no elevation.
+- **Disks are `disk0`, `disk1`, ...**, numbered as Disk Management and
+  `diskpart` number them, which is also the `N` of `\\.\PhysicalDriveN`;
+  `PhysicalDrive1` and `\\.\PhysicalDrive1` are accepted for `disk1`. The
+  geometry comes from `IOCTL_DISK_GET_DRIVE_GEOMETRY_EX` and the description
+  from `IOCTL_STORAGE_QUERY_PROPERTY`, neither of which opens the disk for
+  reading. A mounted VHD is listed but starts unselected in the picker.
+- **There is no TRIM.** The provider has read, write and flush events and
+  nothing else, so the amber layer stays empty.
+- **There is one session.** A second `blockio` takes it over from the first,
+  and one that is killed leaves it running until the next start reclaims it
+  (or `logman stop blockio -ets`).
+
+ETW hands a real-time reader a buffer when the buffer fills, or once a second
+at the most often, so `blockio` flushes the session every sampling interval
+itself; otherwise a quiet disk would show up ten frames late. It is 64-bit Windows only: the ETW structures are written out by
+hand, in the 64-bit layout.
+
 ## Configuration
 
 `~/.config/blockio/config` (`$XDG_CONFIG_HOME/blockio/config`, or
-`$BLOCKIO_CONFIG`) holds defaults, one `option = value` per line, `#`
+`$BLOCKIO_CONFIG`; `%AppData%\blockio\config` on Windows) holds defaults, one `option = value` per line, `#`
 comments:
 
 ```
@@ -204,7 +240,7 @@ half = on               # two rows of cells per terminal row
 buckets = 8192          # slices per device
 columns = 2             # panes side by side, 0 to fit the device count
 interval = 100ms        # sampling interval
-source = fsusage        # auto, dtrace, fsusage (macOS)
+source = fsusage        # auto, dtrace, fsusage (macOS), etw (Windows)
 ```
 
 Flags override the file. Unknown keys and bad values are warned about, never
@@ -212,24 +248,24 @@ fatal.
 
 ## Options
 
-| Flag          | Meaning                                         |
-| ------------- | ----------------------------------------------- |
-| `-a`          | watch every disk, without asking                |
-| `-l`          | list the disks and exit                         |
-| `-i`          | sampling interval (default 100ms)               |
-| `-color`      | `auto`, `truecolor`, `256`, `16`, `off`         |
-| `-scale`      | `auto` or `fixed`                               |
-| `-thresholds` | hot/cold steps, bytes per second per cell       |
-| `-decay`      | half-life of activity on the map                |
-| `-trail`      | half-life of the trail, `0` for none            |
-| `-buckets`    | slices per device (0 fits the terminal)         |
-| `-half`       | half blocks: two rows of cells per terminal row |
-| `-columns`    | panes side by side (0 fits the device count)    |
-| `-source`     | `auto`, `dtrace`, `fsusage` (macOS)             |
-| `-demo`       | synthesize N devices instead of tracing         |
-| `-once`       | sample for a while, print one frame, exit       |
-| `-for`        | how long `-once` samples (default 2s)           |
-| `-size`       | frame size for `-once` (default 100x30)         |
+| Flag          | Meaning                                              |
+| ------------- | ---------------------------------------------------- |
+| `-a`          | watch every disk, without asking                     |
+| `-l`          | list the disks and exit                              |
+| `-i`          | sampling interval (default 100ms)                    |
+| `-color`      | `auto`, `truecolor`, `256`, `16`, `off`              |
+| `-scale`      | `auto` or `fixed`                                    |
+| `-thresholds` | hot/cold steps, bytes per second per cell            |
+| `-decay`      | half-life of activity on the map                     |
+| `-trail`      | half-life of the trail, `0` for none                 |
+| `-buckets`    | slices per device (0 fits the terminal)              |
+| `-half`       | half blocks: two rows of cells per terminal row      |
+| `-columns`    | panes side by side (0 fits the device count)         |
+| `-source`     | `auto`, `dtrace`, `fsusage` (macOS), `etw` (Windows) |
+| `-demo`       | synthesize N devices instead of tracing              |
+| `-once`       | sample for a while, print one frame, exit            |
+| `-for`        | how long `-once` samples (default 2s)                |
+| `-size`       | frame size for `-once` (default 100x30)              |
 
 `-demo` needs neither root nor disks: it fabricates a sweep, scattered writes
 and a busy region, which is the easy way to look at the layouts and the color
@@ -267,8 +303,12 @@ touched buckets are printed, so an idle disk costs nothing.
 `fs_usage` has no aggregation to offer and no notion of a frame, so on macOS
 the Go side keeps both: every line is folded into a
 `map[device, command, bucket]` under a mutex, and a ticker drains it into a
-frame at the sampling interval. Both backends hand the display the same
-`Frame`, which is all it knows about either.
+frame at the sampling interval. ETW on Windows goes through the same
+accumulator, except that the events arrive through a callback `ProcessTrace`
+makes into Go rather than down a pipe; the disk number, size and offset sit
+ahead of the first pointer in each event, at the same offsets whatever the
+kernel's word size. Every backend hands the display the same `Frame`, which is
+all it knows about any of them.
 
 ## Notes on the FreeBSD io provider
 
@@ -297,10 +337,13 @@ one. `int64_t` or the number wraps, silently.
 ## Tests
 
 `go test ./...` covers the parsing of dtrace's output and of the generated
-script, the reading of an `fs_usage` line and the frame it accumulates into, the threshold and color-mode parsers, the ramp (that reads come out
+script, the reading of an `fs_usage` line and the frame it accumulates into,
+the reading of an ETW disk event and of a storage descriptor, the ETW
+structures against the SDK's layout, the threshold and color-mode parsers, the ramp (that reads come out
 green and writes red, that a 256-color index is not emitted as an ANSI code,
 that fixed thresholds ignore the peak), the half-block rows and the pane
-layout. None of it needs root or a terminal.
+layout. None of it needs root or a terminal; each backend's tests run on its
+own platform.
 
 ## License
 

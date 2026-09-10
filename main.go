@@ -7,7 +7,8 @@
 //
 // It needs root either way, and on FreeBSD the dtrace modules as well
 // (kldload dtraceall): the io provider is read through dtrace(1).  On macOS
-// it reads fs_usage(1) instead, which needs nothing turned off.
+// it reads fs_usage(1) instead, which needs nothing turned off.  On Windows
+// it reads Event Tracing for Windows, which needs an elevated prompt.
 package main
 
 import (
@@ -16,7 +17,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,7 +37,7 @@ func main() {
 		window   = flag.Duration("for", 2*time.Second, "how long -once samples")
 		size     = flag.String("size", "100x30", "frame size for -once")
 		demo     = flag.Int("demo", 0, "synthesize N devices instead of tracing (for looking at layouts)")
-		source   = flag.String("source", "auto", "where the I/O comes from: auto, dtrace, fsusage (macOS)")
+		source   = flag.String("source", "auto", "where the I/O comes from: auto, dtrace, fsusage (macOS), etw (Windows)")
 
 		color      = flag.String("color", "auto", "color: auto, truecolor, 256, 16, off")
 		scale      = flag.String("scale", "auto", "color scale: auto (per device) or fixed (thresholds)")
@@ -172,6 +172,13 @@ func run(all, list, once bool, demo int, kind bio.SourceKind, interval, window t
 	if err != nil {
 		return err
 	}
+	// Stop the source and wait for it to let go before returning: an ETW
+	// session outlives the process that started it.
+	defer func() {
+		cancel()
+		for range errs {
+		}
+	}()
 
 	model := ui.New(watch, frames, errs, interval, cfg)
 	if once {
@@ -179,7 +186,6 @@ func run(all, list, once bool, demo int, kind bio.SourceKind, interval, window t
 	}
 
 	_, err = tea.NewProgram(model, tea.WithAltScreen()).Run()
-	cancel()
 	return err
 }
 
@@ -194,7 +200,7 @@ func choose(disks []bio.Disk, args []string, all bool) ([]bio.Disk, error) {
 	if len(args) > 0 {
 		var out []bio.Disk
 		for _, arg := range args {
-			name := strings.TrimPrefix(arg, "/dev/")
+			name := bio.DeviceName(arg)
 			d, ok := byName[name]
 			if !ok {
 				return nil, fmt.Errorf("%s: not a disk with media (try -l)", arg)

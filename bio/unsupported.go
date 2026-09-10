@@ -1,4 +1,4 @@
-//go:build !freebsd && !darwin
+//go:build !freebsd && !darwin && !(windows && (amd64 || arm64))
 
 package bio
 
@@ -8,8 +8,8 @@ import (
 )
 
 // errUnsupported is what everything that has to talk to the kernel returns
-// on a platform with neither the DTrace io provider nor fs_usage(1).
-var errUnsupported = fmt.Errorf("blockio does not know how to watch disks on %s (FreeBSD and macOS only)", runtime.GOOS)
+// on a platform with none of the DTrace io provider, fs_usage(1) and ETW.
+var errUnsupported = fmt.Errorf("blockio does not know how to watch disks on %s/%s (FreeBSD, macOS and 64-bit Windows only)", runtime.GOOS, runtime.GOARCH)
 
 func Disks() ([]Disk, error) { return nil, errUnsupported }
 

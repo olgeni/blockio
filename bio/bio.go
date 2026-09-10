@@ -1,13 +1,15 @@
 // Package bio discovers block devices and watches their I/O.
 //
 // What does the watching is per-platform: FreeBSD reads the DTrace io
-// provider, macOS reads fs_usage(1) by default and DTrace on request.  A
-// Source hides the difference; everything above it sees only Frames.
+// provider, macOS reads fs_usage(1) by default and DTrace on request, and
+// Windows reads Event Tracing for Windows.  A Source hides the difference;
+// everything above it sees only Frames.
 package bio
 
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -118,6 +120,7 @@ const (
 	SourceAuto    SourceKind = "auto"
 	SourceDtrace  SourceKind = "dtrace"
 	SourceFSUsage SourceKind = "fsusage"
+	SourceETW     SourceKind = "etw"
 )
 
 // ParseSourceKind reads a -source value.
@@ -129,8 +132,10 @@ func ParseSourceKind(s string) (SourceKind, error) {
 		return SourceDtrace, nil
 	case "fsusage", "fs_usage":
 		return SourceFSUsage, nil
+	case "etw":
+		return SourceETW, nil
 	}
-	return SourceAuto, fmt.Errorf("bad source %q (auto, dtrace, fsusage)", s)
+	return SourceAuto, fmt.Errorf("bad source %q (auto, dtrace, fsusage, etw)", s)
 }
 
 // safeBuilder collects a subprocess's stderr, which the process writes from
@@ -169,6 +174,21 @@ func HumanBytes(n int64) string {
 		format = "%.1f%c"
 	}
 	return fmt.Sprintf(format, v, "KMGTPE"[exp])
+}
+
+// DeviceName turns a device as someone might type it into the name Disks
+// gives it: /dev/ada0 is ada0, and on Windows, where names do not care
+// about case, \\.\PhysicalDrive1 and PhysicalDrive1 are both disk1.
+func DeviceName(arg string) string {
+	name := strings.TrimPrefix(arg, "/dev/")
+	if runtime.GOOS != "windows" {
+		return name
+	}
+	name = strings.ToLower(strings.TrimPrefix(name, `\\.\`))
+	if n, ok := strings.CutPrefix(name, "physicaldrive"); ok {
+		return "disk" + n
+	}
+	return name
 }
 
 // lessDevice orders ada0 before ada10 before nvd0.

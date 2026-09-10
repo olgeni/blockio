@@ -35,6 +35,7 @@ func TestParseSourceKind(t *testing.T) {
 		"auto":     SourceAuto,
 		"DTrace":   SourceDtrace,
 		"fs_usage": SourceFSUsage,
+		"ETW":      SourceETW,
 	} {
 		got, err := ParseSourceKind(in)
 		if err != nil || got != want {
@@ -43,5 +44,13 @@ func TestParseSourceKind(t *testing.T) {
 	}
 	if _, err := ParseSourceKind("ktrace"); err == nil {
 		t.Error("ktrace should not parse")
+	}
+}
+
+func TestDeviceName(t *testing.T) {
+	for in, want := range map[string]string{"/dev/ada0": "ada0", "ada0": "ada0"} {
+		if got := DeviceName(in); got != want {
+			t.Errorf("DeviceName(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

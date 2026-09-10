@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -30,27 +29,7 @@ type FSUsage struct {
 	Buckets    int
 
 	stderr safeBuilder
-
-	mu    sync.Mutex
-	geom  map[string]Disk // by whole disk name
-	cells map[cellKey]int64
-	stats map[statKey]stat
-}
-
-type cellKey struct {
-	dev    string
-	cmd    Command
-	bucket int
-}
-
-type statKey struct {
-	dev string
-	cmd Command
-}
-
-type stat struct {
-	ops   int64
-	bytes int64
+	acc    *accumulator
 }
 
 // Start runs fs_usage until the context is cancelled.
@@ -59,16 +38,7 @@ func (f *FSUsage) Start(ctx context.Context) (<-chan Frame, <-chan error, error)
 	if interval <= 0 {
 		interval = 100
 	}
-	if f.Buckets <= 0 {
-		f.Buckets = DefaultBuckets
-	}
-
-	f.geom = make(map[string]Disk, len(f.Disks))
-	for _, d := range f.Disks {
-		f.geom[d.Name] = d
-	}
-	f.cells = make(map[cellKey]int64)
-	f.stats = make(map[statKey]stat)
+	f.acc = newAccumulator(f.Disks, f.Buckets)
 
 	cmd := exec.CommandContext(ctx, "fs_usage", "-w", "-f", "diskio")
 	cmd.Stderr = &f.stderr
@@ -81,7 +51,6 @@ func (f *FSUsage) Start(ctx context.Context) (<-chan Frame, <-chan error, error)
 		return nil, nil, fmt.Errorf("fs_usage: %w", err)
 	}
 
-	frames := make(chan Frame, 8)
 	errs := make(chan error, 1)
 	done := make(chan struct{})
 
@@ -94,29 +63,8 @@ func (f *FSUsage) Start(ctx context.Context) (<-chan Frame, <-chan error, error)
 		}
 	}()
 
-	// fs_usage has no notion of a frame, so the clock is ours: drain what
-	// has accumulated every interval, the way the D script's tick does.
-	go func() {
-		defer close(frames)
-		tick := time.NewTicker(time.Duration(interval) * time.Millisecond)
-		defer tick.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-done:
-				return
-			case <-tick.C:
-			}
-			// If the display is behind, let the activity accumulate
-			// into the next frame rather than dropping it: the kernel
-			// does the same for the D script's aggregations.
-			if len(frames) == cap(frames) {
-				continue
-			}
-			frames <- f.drain()
-		}
-	}()
+	// fs_usage has no notion of a frame, so the clock is ours.
+	frames := f.acc.run(ctx, time.Duration(interval)*time.Millisecond, done)
 
 	go func() {
 		defer close(errs)
@@ -140,45 +88,9 @@ func (f *FSUsage) Warnings() string { return f.stderr.String() }
 
 // add folds one fs_usage line into the frame being accumulated.
 func (f *FSUsage) add(line string) {
-	dev, cmd, block, bytes, ok := parseDiskIO(line)
-	if !ok {
-		return
+	if dev, cmd, block, bytes, ok := parseDiskIO(line); ok {
+		f.acc.addBlock(dev, cmd, block, bytes)
 	}
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	d, ok := f.geom[dev]
-	if !ok || d.MediaSize <= 0 || d.SectorSize <= 0 {
-		return // not watched
-	}
-	bucket := int(block * d.SectorSize * int64(f.Buckets) / d.MediaSize)
-	if bucket < 0 || bucket >= f.Buckets {
-		return
-	}
-
-	f.cells[cellKey{dev, cmd, bucket}] += bytes
-	s := f.stats[statKey{dev, cmd}]
-	s.ops++
-	s.bytes += bytes
-	f.stats[statKey{dev, cmd}] = s
-}
-
-// drain turns what has accumulated since the last tick into a frame.
-func (f *FSUsage) drain() Frame {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	var frame Frame
-	for k, bytes := range f.cells {
-		frame.Cells = append(frame.Cells, Cell{k.dev, k.cmd, k.bucket, bytes})
-		delete(f.cells, k)
-	}
-	for k, s := range f.stats {
-		frame.Stats = append(frame.Stats, Stat{k.dev, k.cmd, s.ops, s.bytes})
-		delete(f.stats, k)
-	}
-	return frame
 }
 
 // parseDiskIO reads one "fs_usage -f diskio" line.  The device is reported

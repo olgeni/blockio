@@ -70,9 +70,7 @@ func TestFSUsageFrames(t *testing.T) {
 		Disks:   []Disk{{Name: "disk3", SectorSize: 4096, MediaSize: 1 << 40}},
 		Buckets: 1024,
 	}
-	f.geom = map[string]Disk{"disk3": f.Disks[0]}
-	f.cells = map[cellKey]int64{}
-	f.stats = map[statKey]stat{}
+	f.acc = newAccumulator(f.Disks, f.Buckets)
 
 	// half way into the device: block 128Mi of 256Mi blocks
 	f.add("00:00:00.1 WrData[A] D=0x8000000 B=0x1000 /dev/disk3s5 big.bin 0.1 W dd.1")
@@ -80,7 +78,7 @@ func TestFSUsageFrames(t *testing.T) {
 	f.add("00:00:00.3 RdData[A] D=0x0 B=0x4000 /dev/disk3 x 0.1 W dd.1")
 	f.add("00:00:00.4 WrData[A] D=0x1000 B=0x1000 /dev/disk9 x 0.1 W dd.1") // not watched
 
-	frame := f.drain()
+	frame := f.acc.drain()
 	if len(frame.Cells) != 2 {
 		t.Fatalf("cells = %v, want one per bucket touched", frame.Cells)
 	}
@@ -104,7 +102,7 @@ func TestFSUsageFrames(t *testing.T) {
 			t.Errorf("write stat = %v", s)
 		}
 	}
-	if got := f.drain(); len(got.Cells) != 0 || len(got.Stats) != 0 {
+	if got := f.acc.drain(); len(got.Cells) != 0 || len(got.Stats) != 0 {
 		t.Errorf("second drain = %v, want an empty frame", got)
 	}
 }
